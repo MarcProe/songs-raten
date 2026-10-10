@@ -21,7 +21,7 @@ Kleine Web-App für das klassische Spiel „Song anhören und Titel, Interpret, 
 ## Setup (einmalig)
 
 1. Unter [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) eine App anlegen (Name z. B. „Songs Raten“).
-2. **Redirect URI** eintragen: `https://marcproe.github.io/songs-raten/`
+2. **Redirect URI** eintragen: `https://marcproe.github.io/songs-raten/index.html`
    *(Lokal: `http://localhost:8000/index.html` – beide URIs können eingetragen sein.)*
 3. **Client ID** kopieren und in das Feld der Anfangsmaske eintragen (wird im Browser gespeichert).
 
@@ -44,7 +44,7 @@ Dann im Browser öffnen: <http://localhost:8000>
 |---|---|
 | **Genres** (Checkboxen) | 13 gängige Genres. Keine Auswahl = *alle* (pro Runde zufälliger Mix aus einem größeren Genre-Pool) |
 | **Jahre von–bis** | Filter nach Erscheinungsjahr des Albums (z. B. 1990–2020) |
-| **Nur Top-100** | nur Tracks mit Spotify-Popularity ≥ 80 |
+| **Nur Top-100** | nur die 100 populärsten Songs (Spotify-Popularity), die alle Filter erfüllen |
 | **Nur Alben** | Singles ausschließen (nur Album-Veröffentlichungen) |
 | **Schwierig** | extrem beliebte Tracks ausschließen (Popularity ≤ 60) – für erfahrene Zuhörer |
 | **Abspielzeit** | Sekunden bis Auto-Stopp (Default 20, Bereich 5–180) |
@@ -53,3 +53,7 @@ Dann im Browser öffnen: <http://localhost:8000>
 
 Vanilla JS, kein Build-Step, keine Abhängigkeiten. Hosted via GitHub Pages.
 Tokens liegen nur lokal im `localStorage` des Browsers.
+
+## Hinweis zur Auswahl
+
+Songs werden über die Spotify-Search-API pro gewähltem Genre abgefragt (bis zu 100 Tracks/Genre), dann lokal nach Jahr, Popularity und Album-Typ gefiltert, und aus dem verbleibenden Pool (oder dessen 100 populärsten, bei „Top-100“) zufällig ein Track gezogen. Spotify liefert keine perfekte Genre-Reinheit – es ist eine heuristische Auswahl, die in der Praxis gut funktioniert.
