@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.7';
+  const APP_VERSION = '1.8';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -198,18 +198,22 @@
 
   /* ---------------- Parameter ---------------- */
   function readParams() {
+    const modeEl = document.querySelector('input[name="mode"]:checked');
     return {
+      mode: modeEl ? modeEl.value : 'genre',
       genres: [...document.querySelectorAll('#genres input:checked')].map((c) => c.dataset.q),
       yearFrom: parseInt($('#year-from').value, 10),
       yearTo: parseInt($('#year-to').value, 10),
       top100: $('#opt-top100').checked,
       albumsOnly: $('#opt-albums').checked,
       hard: $('#opt-hard').checked,
+      legendYearFrom: parseInt($('#legend-year-from').value, 10),
+      legendYearTo: parseInt($('#legend-year-to').value, 10),
       seconds: Math.min(180, Math.max(5, parseInt($('#opt-seconds').value, 10) || 20)),
     };
   }
 
-  /* ---------------- Song-Suche ----------------
+  /* ---------------- Song-Suche (Genre) ----------------
      Pro Genre werden Tracks über paginierte /search-Requests geholt.
      Seit Feb 2026: max 10 Treffer pro Request (Dev Mode) bzw. 50 (Extended Quota).
      Wir versuchen limit=50; bei 400 ("Invalid limit" – oft Dev-Quota-Fehler)
@@ -218,6 +222,106 @@
   const SEARCH_LIMIT_HIGH = '50';
   const SEARCH_LIMIT_LOW = '10';
   const MAX_PAGES = 5; // max. 50 (50) oder 50 (5×10) Tracks pro Genre
+
+  /* ---------------- Spielmodi: Top 50 DE & Chart-Legenden ---------------- */
+  const DE_TOP50_PLAYLIST = '37i9dQZEVXbJiZcmkrIHGU'; // Spotify „Top 50 - Germany“
+  let legendsCache = null;
+
+  async function loadLegends() {
+    if (legendsCache) return legendsCache;
+    try {
+      const res = await fetch('charts.json', { cache: 'no-store' });
+      if (res.ok) {
+        const d = await res.json();
+        legendsCache = (d && d.songs) || [];
+      }
+    } catch { legendsCache = []; }
+    return legendsCache;
+  }
+
+  // Punktgenaue Titelsuche – limit=10 läuft in jedem Quota-Modus.
+  async function searchTrack(query) {
+    const res = await apiFetch('/search?' + new URLSearchParams({ q: query, type: 'track', limit: '10' }));
+    if (!res.ok) {
+      let detail = '';
+      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+      throw new Error('Spotify-Suche: HTTP ' + res.status + ' (' + detail + ')');
+    }
+    const d = await res.json();
+    return (d.tracks && d.tracks.items) || [];
+  }
+
+  function trackToPool(t) {
+    const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
+    const img = (t.album.images || [])[0];
+    return {
+      id: t.id,
+      uri: t.uri,
+      name: t.name,
+      artists: t.artists.map((a) => a.name).join(', '),
+      year: Number.isFinite(year) ? year : new Date().getFullYear(),
+      image: img ? img.url : '',
+      popularity: typeof t.popularity === 'number' ? t.popularity : 0,
+    };
+  }
+
+  // Modus: Top 50 Deutschland (aktuelle Charts-Playlist)
+  async function findSongCharts(p, onStatus) {
+    if (onStatus) onStatus('Lade deutsche Top 50 …');
+    const items = [];
+    const res = await apiFetch('/playlists/' + DE_TOP50_PLAYLIST + '/tracks?limit=50&offset=0');
+    if (res.ok) {
+      const d = await res.json();
+      for (const it of d.items || []) if (it && it.track) items.push(it.track);
+    } else if (res.status === 400) {
+      // Dev-Mode-Fallback: 10er-Seiten
+      for (let off = 0; off < 50; off += 10) {
+        const r2 = await apiFetch('/playlists/' + DE_TOP50_PLAYLIST + '/tracks?limit=10&offset=' + off);
+        if (!r2.ok) {
+          let detail = '';
+          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+          throw new Error('Playlist-Abfrage: HTTP ' + r2.status + ' (' + detail + ')');
+        }
+        const d2 = await r2.json();
+        const batch = d2.items || [];
+        for (const it of batch) if (it && it.track) items.push(it.track);
+        if (batch.length < 10) break;
+      }
+    } else {
+      let detail = '';
+      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+      throw new Error('Playlist-Abfrage: HTTP ' + res.status + ' (' + detail + ')');
+    }
+    if (!items.length) return { _empty: 'Die Top-50-Playlist lieferte keine Songs.' };
+    const pool = items.filter(Boolean).map(trackToPool);
+    return pool[(Math.random() * pool.length) | 0];
+  }
+
+  // Modus: Chart-Legenden (kuratierte #1-Hits, per Titelsuche auf Spotify)
+  async function findSongLegends(p, onStatus) {
+    if (onStatus) onStatus('Lade Chart-Legenden …');
+    const all = await loadLegends();
+    if (!all.length) return { _empty: 'Chart-Legenden konnten nicht geladen werden (charts.json fehlt).' };
+    let cand = all.filter((s) => s.y >= p.legendYearFrom && s.y <= p.legendYearTo);
+    if (!cand.length) return { _empty: 'Keine #1-Hits im Bereich ' + p.legendYearFrom + '–' + p.legendYearTo + '.' };
+    cand = [...cand].sort(() => Math.random() - 0.5);
+    const tried = cand.slice(0, 10);
+    const norm = (x) => (x || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
+    for (const s of tried) {
+      if (onStatus) onStatus('Suche: „' + s.t + '“ …');
+      try {
+        const items = await searchTrack(s.t + ' ' + s.a);
+        if (items.length) {
+          let pick = items.find((it) => norm(it.name) === norm(s.t));
+          if (!pick) pick = items.slice().sort((a, b) => (b.popularity || 0) - (a.popularity || 0))[0];
+          const obj = trackToPool(pick);
+          obj.year = Number.isFinite(obj.year) ? obj.year : s.y;
+          return obj;
+        }
+      } catch { /* Kandidat nicht verfügbar – nächsten versuchen */ }
+    }
+    return { _empty: 'Keiner der Kandidaten wurde auf Spotify gefunden (10 Versuche). Zeitraum ggf. ab ~1980 wählen.' };
+  }
 
   async function searchGenre(genre, onStatus) {
     // Erstversuch: limit=50 (Extended Quota / ältere Apps)
@@ -391,7 +495,11 @@
     $('#round-counter').textContent = 'Runde ' + game.round;
     setGameStatus('🎵 Song wird gesucht …');
     try {
-      const song = await findSong(game.params, setGameStatus);
+      const song = game.params.mode === 'charts'
+        ? await findSongCharts(game.params, setGameStatus)
+        : game.params.mode === 'legends'
+          ? await findSongLegends(game.params, setGameStatus)
+          : await findSong(game.params, setGameStatus);
       if (!song || song._empty) {
         setGameStatus('❌ Kein passender Song gefunden.<br><span class="hint">' + (song && song._empty ? song._empty : 'Jahresbereich, Genre oder Filter lockern.') + '</span>');
         $('#btn-next').disabled = false;
@@ -438,9 +546,16 @@
     const p = readParams();
     const err = $('#setup-error');
     if (!getAuth()) { err.textContent = 'Bitte zuerst mit Spotify anmelden.'; return; }
-    if (!Number.isFinite(p.yearFrom) || !Number.isFinite(p.yearTo) || p.yearFrom > p.yearTo) {
-      err.textContent = 'Jahresbereich prüfen (von ≤ bis).';
-      return;
+    if (p.mode === 'genre') {
+      if (!Number.isFinite(p.yearFrom) || !Number.isFinite(p.yearTo) || p.yearFrom > p.yearTo) {
+        err.textContent = 'Jahresbereich prüfen (von ≤ bis).';
+        return;
+      }
+    } else if (p.mode === 'legends') {
+      if (!Number.isFinite(p.legendYearFrom) || !Number.isFinite(p.legendYearTo) || p.legendYearFrom > p.legendYearTo) {
+        err.textContent = 'Zeitraum der Chart-Legenden prüfen (von ≤ bis).';
+        return;
+      }
     }
     err.textContent = '';
     game.params = p;
@@ -486,6 +601,17 @@
       lab.append(c, span);
       wrap.appendChild(lab);
     }
+
+    // Spielmodus-UI: Filter-Karten je nach Modus ein-/ausblenden
+    const syncModeUI = () => {
+      const m = (document.querySelector('input[name="mode"]:checked') || {}).value || 'genre';
+      $('#card-filter-genre').hidden = m !== 'genre';
+      $('#card-filter-legends').hidden = m !== 'legends';
+      document.querySelectorAll('.mode').forEach((el) => el.classList.toggle('active', el.querySelector('input').checked));
+    };
+    document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', syncModeUI));
+    syncModeUI();
+    loadLegends().catch(() => {}); // Legenden vorladen (nicht blockierend)
 
     await loadConfig();
 
