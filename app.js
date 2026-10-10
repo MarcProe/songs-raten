@@ -6,6 +6,8 @@
 (() => {
   'use strict';
 
+  const APP_VERSION = '1.4';
+
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
 
@@ -225,7 +227,12 @@
       // limit: Spotify akzeptiert hier maximal 50 – mehr gibt HTTP 400 zurück.
       const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '50' }));
       if (!res.ok) {
-        apiErrors.push(g + ' → HTTP ' + res.status);
+        let detail = '';
+        try {
+          const b = await res.json();
+          detail = b && b.error ? (b.error.message || b.error.reason) : '';
+        } catch { /* Body kein JSON */ }
+        apiErrors.push(g + ' → HTTP ' + res.status + (detail ? ' (' + detail + ')' : ''));
         continue;
       }
       const data = await res.json();
@@ -250,12 +257,13 @@
         });
       }
     }
-    if (apiErrors.length) {
+    if (!pool.length && apiErrors.length) {
       throw new Error('Spotify-API-Fehler bei der Suche: ' + apiErrors.join(', '));
     }
+    if (apiErrors.length) console.warn('Teil-Suche fehlgeschlagen:', apiErrors.join(', '));
     if (!pool.length) {
       const hint = rawHits === 0
-        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
+        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).' + (apiErrors.length ? ' (' + apiErrors.join(', ') + ')' : '')
         : rawHits + ' Tracks gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern).';
       return { _empty: hint };
     }
@@ -432,6 +440,11 @@
       }
     }
     renderAuth();
+
+    const verEl = document.createElement('span');
+    verEl.id = 'app-version';
+    verEl.textContent = 'v' + APP_VERSION;
+    document.querySelector('header h1').appendChild(verEl);
   }
 
   init();
