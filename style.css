@@ -97,6 +97,25 @@ input[type="number"] { width: 92px; }
 }
 .genre input { accent-color: var(--green); width: 16px; height: 16px; }
 
+.mode-grid { display: grid; gap: 10px; }
+.mode {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: #0d0e10;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .15s ease, background .15s ease;
+}
+.mode:hover { background: #121316; }
+.mode:has(input:checked) { border-color: var(--green); background: #101812; }
+.mode input { accent-color: var(--green); width: 16px; height: 16px; margin-top: 3px; flex-shrink: 0; }
+.mode-name { display: block; font-size: 15px; font-weight: 700; }
+.mode-desc { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+
 .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
 .hint a { color: var(--green); }
 
