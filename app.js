@@ -62,8 +62,8 @@
   clientIdInput.value = localStorage.getItem(CLIENT_KEY) || '';
   const effectiveClientId = () => (clientIdInput.value || '').trim() || configClientId;
   const redirectUri = () => {
-    // GitHub Pages: https://marcproe.github.io/songs-raten/
-    // Lokal:         http://localhost:8000/index.html
+    // GitHub Pages: https://<user>.github.io/songs-raten/
+    // Lokal:        http://localhost:8000/index.html
     const base = location.origin + location.pathname;
     return base.endsWith('/') ? base + 'index.html' : base;
   };
@@ -207,7 +207,10 @@
     };
   }
 
-  /* ---------------- Song-Suche ---------------- */
+  /* ---------------- Song-Suche ----------------
+     Pro Genre werden bis zu 100 Tracks geholt und lokal gefiltert.
+     "Top-100" = die 100 populärsten Tracks, die ALLE Filter erfüllen,
+     aus denen dann zufällig einer gezogen wird.                     */
   async function findSong(p, onStatus) {
     let genres = p.genres;
     if (!genres.length) {
@@ -217,7 +220,7 @@
     const pool = [];
     for (const g of genres.slice(0, 12)) {
       if (onStatus) onStatus('Suche in „' + g + '“ …');
-      const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '50' }));
+      const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '100' }));
       if (!res.ok) continue;
       const data = await res.json();
       for (const t of data.tracks.items) {
@@ -225,7 +228,6 @@
         seen.add(t.id);
         const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
         if (!Number.isFinite(year) || year < p.yearFrom || year > p.yearTo) continue;
-        if (p.top100 && t.popularity < 80) continue;
         if (p.albumsOnly && (!t.album || t.album.type !== 'ALBUM')) continue;
         if (p.hard && t.popularity > 60) continue;
         const img = (t.album.images || [])[0];
@@ -236,10 +238,16 @@
           artists: t.artists.map((a) => a.name).join(', '),
           year,
           image: img ? img.url : '',
+          popularity: typeof t.popularity === 'number' ? t.popularity : 0,
         });
       }
     }
     if (!pool.length) return null;
+    if (p.top100) {
+      pool.sort((a, b) => b.popularity - a.popularity);
+      const top = pool.slice(0, 100);
+      return top[(Math.random() * top.length) | 0];
+    }
     return pool[(Math.random() * pool.length) | 0];
   }
 
