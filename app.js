@@ -208,9 +208,9 @@
   }
 
   /* ---------------- Song-Suche ----------------
-     Pro Genre werden bis zu 100 Tracks geholt und lokal gefiltert.
-     "Top-100" = die 100 populärsten Tracks, die ALLE Filter erfüllen,
-     aus denen dann zufällig einer gezogen wird.                     */
+     Pro Genre werden bis zu 50 Tracks geholt (Spotify-Maximum) und lokal
+     gefiltert. "Top-100" = die bis zu 100 populärsten Tracks, die ALLE
+     Filter erfüllen, aus denen dann zufällig einer gezogen wird.         */
   async function findSong(p, onStatus) {
     let genres = p.genres;
     if (!genres.length) {
@@ -218,12 +218,20 @@
     }
     const seen = new Set();
     const pool = [];
+    const apiErrors = [];
+    let rawHits = 0;
     for (const g of genres.slice(0, 12)) {
       if (onStatus) onStatus('Suche in „' + g + '“ …');
-      const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '100' }));
-      if (!res.ok) continue;
+      // limit: Spotify akzeptiert hier maximal 50 – mehr gibt HTTP 400 zurück.
+      const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '50' }));
+      if (!res.ok) {
+        apiErrors.push(g + ' → HTTP ' + res.status);
+        continue;
+      }
       const data = await res.json();
-      for (const t of data.tracks.items) {
+      const items = (data && data.tracks && data.tracks.items) || [];
+      rawHits += items.length;
+      for (const t of items) {
         if (!t || seen.has(t.id)) continue;
         seen.add(t.id);
         const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
@@ -242,7 +250,15 @@
         });
       }
     }
-    if (!pool.length) return null;
+    if (apiErrors.length) {
+      throw new Error('Spotify-API-Fehler bei der Suche: ' + apiErrors.join(', '));
+    }
+    if (!pool.length) {
+      const hint = rawHits === 0
+        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
+        : rawHits + ' Tracks gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern).';
+      return { _empty: hint };
+    }
     if (p.top100) {
       pool.sort((a, b) => b.popularity - a.popularity);
       const top = pool.slice(0, 100);
@@ -302,8 +318,8 @@
     setGameStatus('🎵 Song wird gesucht …');
     try {
       const song = await findSong(game.params, setGameStatus);
-      if (!song) {
-        setGameStatus('❌ Kein passender Song gefunden.<br><span class="hint">Jahresbereich, Genre oder Filter lockern.</span>');
+      if (!song || song._empty) {
+        setGameStatus('❌ Kein passender Song gefunden.<br><span class="hint">' + (song && song._empty ? song._empty : 'Jahresbereich, Genre oder Filter lockern.') + '</span>');
         $('#btn-next').disabled = false;
         return;
       }
@@ -314,7 +330,7 @@
       game.timers.push(setTimeout(onStopped, game.params.seconds * 1000));
     } catch (e) {
       $('#game-error').textContent = e.message;
-      setGameStatus('⚠️ Playback konnte nicht gestartet werden.');
+      setGameStatus('⚠️ Fehler bei der Song-Auswahl oder beim Start des Playbacks. Details unten.');
       $('#btn-next').disabled = false;
     }
   }
