@@ -1,0 +1,126 @@
+:root {
+  --bg: #0f0f12;
+  --card: #1a1b1e;
+  --line: #2a2b2f;
+  --text: #f5f5f7;
+  --muted: #9a9aa0;
+  --green: #1db954;
+  --err: #e5484d;
+  --warn: #ffd166;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: radial-gradient(1200px 600px at 70% -10%, #1d2413 0%, var(--bg) 55%);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header { padding: 28px 24px 8px; max-width: 760px; margin: 0 auto; }
+h1 { margin: 0; font-size: 28px; letter-spacing: .5px; }
+main { max-width: 760px; margin: 0 auto; padding: 12px 24px 60px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin: 16px 0;
+}
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+input[type="text"], input[type="number"] {
+  background: #0d0e10;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+input[type="number"] { width: 92px; }
+
+.btn {
+  background: var(--green);
+  color: #08130b;
+  font-weight: 700;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 15px;
+  cursor: pointer;
+}
+.btn:hover { background: #25d266; }
+.btn:disabled { background: #2a2b2f; color: #6a6a70; cursor: not-allowed; }
+.btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+.btn.ghost:hover { background: #222327; }
+.btn.big { font-size: 17px; padding: 14px 36px; display: block; margin: 22px auto 10px; }
+
+.genre-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+.genre {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: #0d0e10;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  user-select: none;
+}
+.genre input { accent-color: var(--green); width: 16px; height: 16px; }
+
+.hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
+.hint a { color: var(--green); }
+
+.checks { display: grid; gap: 8px; margin-top: 14px; }
+.checks label { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+.checks input { accent-color: var(--green); width: 16px; height: 16px; }
+
+.year-row { margin-top: 12px; }
+.year-row label, .inline { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+
+.status { font-size: 13.5px; margin-bottom: 10px; color: var(--muted); }
+.status.ok { color: var(--green); }
+.status.err { color: var(--err); }
+
+.error { color: var(--err); font-size: 14px; margin-top: 10px; min-height: 1.2em; line-height: 1.4; }
+
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+.round { color: var(--muted); font-size: 14px; }
+
+#game-stage { min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.game-status { font-size: 18px; line-height: 1.5; }
+.game-status.playing { color: var(--green); }
+.game-status.stopped { color: var(--warn); }
+
+.song-card { text-align: center; margin-top: 6px; }
+.song-card img {
+  width: 180px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  margin-bottom: 12px;
+}
+.song-card h3 { margin: 4px 0; font-size: 22px; }
+.song-card .year { color: var(--green); font-weight: 700; font-size: 16px; margin: 4px 0 10px; }
+.song-card a { color: var(--green); text-decoration: none; font-size: 14px; }
+.song-card a:hover { text-decoration: underline; }
+
+[hidden] { display: none !important; }

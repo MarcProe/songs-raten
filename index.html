@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Songs Raten – Spotify Party-Spiel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🎧 Songs Raten</h1>
+  </header>
+
+  <main>
+    <!-- ================= Anfangsmaske ================= -->
+    <section id="view-setup" class="view">
+
+      <div class="card">
+        <h2>1 · Spotify verbinden</h2>
+        <div id="auth-status" class="status">Prüfe …</div>
+        <div class="row">
+          <input id="client-id" type="text" placeholder="Spotify Client ID (optional – sonst config.json)" autocomplete="off">
+          <button id="btn-login" class="btn">Mit Spotify anmelden</button>
+          <button id="btn-logout" class="btn ghost" hidden>Abmelden</button>
+        </div>
+        <p class="hint">Login läuft per PKCE direkt im Browser – kein Backend nötig. Client ID aus <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com</a>.</p>
+      </div>
+
+      <div class="card">
+        <h2>2 · Filter</h2>
+        <div class="genre-grid" id="genres"></div>
+        <p class="hint">Keine Auswahl = <b>alle Genres</b> (pro Runde zufälliger Mix).</p>
+
+        <div class="row year-row">
+          <label>Jahre von
+            <input id="year-from" type="number" value="1990" min="1900" max="2026">
+          </label>
+          <label>bis
+            <input id="year-to" type="number" value="2020" min="1900" max="2026">
+          </label>
+        </div>
+
+        <div class="checks">
+          <label><input type="checkbox" id="opt-top100"> Nur Top-100 (sehr beliebte Songs)</label>
+          <label><input type="checkbox" id="opt-albums"> Nur Alben (keine Singles)</label>
+          <label><input type="checkbox" id="opt-hard"> Schwierig (extrem beliebte Songs ausschließen)</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3 · Abspielen</h2>
+        <label class="inline">
+          Abspielzeit vor dem Auto-Stopp:
+          <input id="opt-seconds" type="number" value="20" min="5" max="180"> Sekunden
+        </label>
+        <p class="hint">Nach dem Stopp erscheinen 2 Sekunden später der „Anzeigen“-Button und „Nächster Song“.</p>
+      </div>
+
+      <button id="btn-start" class="btn big" disabled>▶ Spiel starten</button>
+      <div id="setup-error" class="error"></div>
+    </section>
+
+    <!-- ================= Spielfeld ================= -->
+    <section id="view-game" class="view" hidden>
+      <div class="topbar">
+        <button id="btn-back" class="btn ghost">← Anfangsmaske</button>
+        <span id="round-counter" class="round"></span>
+      </div>
+
+      <div class="card center" id="game-stage">
+        <div id="game-status" class="game-status"></div>
+        <button id="btn-reveal" class="btn big" hidden>👀 Anzeigen</button>
+        <div id="song-card" class="song-card" hidden>
+          <img id="song-img" alt="Albumcover">
+          <h3 id="song-title"></h3>
+          <p id="song-artist"></p>
+          <p id="song-year" class="year"></p>
+          <a id="song-link" target="_blank" rel="noopener">Auf Spotify öffnen ↗</a>
+        </div>
+      </div>
+
+      <button id="btn-next" class="btn big" disabled>⏭ Nächster Song</button>
+      <div id="game-error" class="error"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
