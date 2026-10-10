@@ -378,9 +378,10 @@
     return { _empty: 'Keiner der Kandidaten wurde auf Spotify gefunden (10 Versuche). Zeitraum ggf. ab ~1980 wählen.' };
   }
 
-  async function searchGenre(genre, onStatus) {
+  async function searchGenre(genre, offset = 0) {
     // Erstversuch: limit=50 (Extended Quota / ältere Apps)
     const qs = new URLSearchParams({ q: 'genre:' + genre, type: 'track', limit: SEARCH_LIMIT_HIGH });
+    if (offset) qs.set('offset', String(offset));
     const res = await apiFetch('/search?' + qs.toString());
     if (res.ok) {
       const data = await res.json();
@@ -389,7 +390,8 @@
     // Fallback: Dev Mode → max 10 pro Request, paginieren
     if (res.status === 400) {
       const items = [];
-      for (let page = 0; page < MAX_PAGES; page++) {
+      const startPage = Math.floor(offset / 10);
+      for (let page = startPage; page < startPage + MAX_PAGES; page++) {
         const q2 = new URLSearchParams({ q: 'genre:' + genre, type: 'track', limit: SEARCH_LIMIT_LOW, offset: String(page * 10) });
         const r2 = await apiFetch('/search?' + q2.toString());
         if (!r2.ok) {
@@ -411,53 +413,50 @@
     throw new Error('HTTP ' + res.status + ' (' + detail + ')');
   }
 
+  // Genre-Modus: Pro Runde wird EINES Genre per Zufall gewählt (aus der Auswahl,
+  // bei „Alle“ aus dem 32er-Pool), und der Song kommt nur aus diesem Genre.
+  // → max. 1 Such-Call pro Runde (limit=50) – deutlich schonender für die Quota.
   async function findSong(p, onStatus) {
-    let genres = p.genres;
-    if (!genres.length) {
-      genres = [...ALL_GENRE_POOL].sort(() => Math.random() - 0.5).slice(0, 6);
-    }
-    const seen = new Set();
-    const pool = [];
-    const apiErrors = [];
-    let rawHits = 0;
-    for (const g of genres.slice(0, 12)) {
-      if (onStatus) onStatus('Suche in „' + g + '“ …');
-      try {
-        const items = await searchGenre(g);
-        rawHits += items.length;
-        for (const t of items) {
-          if (!t || seen.has(t.id)) continue;
-          seen.add(t.id);
-          const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
-          if (!Number.isFinite(year) || year < p.yearFrom || year > p.yearTo) continue;
-          if (p.albumsOnly && (!t.album || t.album.type !== 'ALBUM')) continue;
-          if (p.hard && t.popularity > 60) continue;
-          const img = (t.album.images || [])[0];
-          pool.push({
-            id: t.id,
-            uri: t.uri,
-            name: t.name,
-            artists: t.artists.map((a) => a.name).join(', '),
-            year,
-            image: img ? img.url : '',
-            popularity: typeof t.popularity === 'number' ? t.popularity : 0,
-          });
+    const genrePool = p.genres.length ? p.genres : ALL_GENRE_POOL;
+    const genre = genrePool[(Math.random() * genrePool.length) | 0];
+    if (onStatus) onStatus('Genre: „' + genre + '“ – Song wird gesucht …');
+    let items;
+    try {
+      items = await searchGenre(genre);
+      // Top-100 aktiv: 2. Seite holen (limit=50/Request → max. 100 Tracks)
+      if (p.top100 && items.length >= 50) {
+        const more = await searchGenre(genre, 50);
+        if (more.length) {
+          const seenIds = new Set(items.map((t) => t && t.id));
+          for (const t of more) if (t && t.id && !seenIds.has(t.id)) { items.push(t); seenIds.add(t.id); }
         }
-      } catch (e) {
-        // Rate-Limit/Quota (429/403): Quota ist erschöpft – Rest der Runde nicht
-        // weiter aufreizen, sofort abbrechen und klare Meldung zeigen.
-        if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
-        apiErrors.push(g + ' → ' + e.message);
       }
+    } catch (e) {
+      if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
+      return { _empty: 'Genre-Suche fehlgeschlagen: ' + e.message };
     }
-    if (!pool.length && apiErrors.length) {
-      throw new Error(apiErrors[0]); // erster Fehler reicht (meist alle gleich)
+    const pool = [];
+    for (const t of items) {
+      if (!t) continue;
+      const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
+      if (!Number.isFinite(year) || year < p.yearFrom || year > p.yearTo) continue;
+      if (p.albumsOnly && (!t.album || t.album.type !== 'ALBUM')) continue;
+      if (p.hard && t.popularity > 60) continue;
+      const img = (t.album.images || [])[0];
+      pool.push({
+        id: t.id,
+        uri: t.uri,
+        name: t.name,
+        artists: t.artists.map((a) => a.name).join(', '),
+        year,
+        image: img ? img.url : '',
+        popularity: typeof t.popularity === 'number' ? t.popularity : 0,
+      });
     }
-    if (apiErrors.length) console.warn('Teil-Suche fehlgeschlagen:', apiErrors.join('; '));
     if (!pool.length) {
-      const hint = rawHits === 0
+      const hint = items.length === 0
         ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
-        : rawHits + ' Tracks gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern).';
+        : items.length + ' Tracks in „' + genre + '“ gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern oder „Nächster Song“ erneut).';
       return { _empty: hint };
     }
     if (p.top100) {
