@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.4';
+  const APP_VERSION = '1.6';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -210,9 +210,48 @@
   }
 
   /* ---------------- Song-Suche ----------------
-     Pro Genre werden bis zu 50 Tracks geholt (Spotify-Maximum) und lokal
-     gefiltert. "Top-100" = die bis zu 100 populärsten Tracks, die ALLE
-     Filter erfüllen, aus denen dann zufällig einer gezogen wird.         */
+     Pro Genre werden Tracks über paginierte /search-Requests geholt.
+     Seit Feb 2026: max 10 Treffer pro Request (Dev Mode) bzw. 50 (Extended Quota).
+     Wir versuchen limit=50; bei 400 ("Invalid limit" – oft Dev-Quota-Fehler)
+     fallen wir auf limit=10 + Pagination zurück.
+     "Top-100" = die bis zu 100 populärsten, die ALLE Filter erfüllen.  */
+  const SEARCH_LIMIT_HIGH = '50';
+  const SEARCH_LIMIT_LOW = '10';
+  const MAX_PAGES = 5; // max. 50 (50) oder 50 (5×10) Tracks pro Genre
+
+  async function searchGenre(genre, onStatus) {
+    // Erstversuch: limit=50 (Extended Quota / ältere Apps)
+    const qs = new URLSearchParams({ q: 'genre:' + genre, type: 'track', limit: SEARCH_LIMIT_HIGH });
+    const res = await apiFetch('/search?' + qs.toString());
+    if (res.ok) {
+      const data = await res.json();
+      return (data.tracks && data.tracks.items) || [];
+    }
+    // Fallback: Dev Mode → max 10 pro Request, paginieren
+    if (res.status === 400) {
+      const items = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const q2 = new URLSearchParams({ q: 'genre:' + genre, type: 'track', limit: SEARCH_LIMIT_LOW, offset: String(page * 10) });
+        const r2 = await apiFetch('/search?' + q2.toString());
+        if (!r2.ok) {
+          let detail = '';
+          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+          throw new Error('Spotify /search: HTTP ' + r2.status + ' (' + detail + ') – ' +
+            'Sehr wahrscheinlich: Dev-App ohne Extended Quota Mode. In developer.spotify.com/dashboard → App → Settings → Extended Quota Mode aktivieren.');
+        }
+        const d2 = await r2.json();
+        const batch = (d2.tracks && d2.tracks.items) || [];
+        items.push(...batch);
+        if (batch.length < 10) break; // letzte Seite
+      }
+      return items;
+    }
+    // Andere Fehler (401, 429, 5xx)
+    let detail = '';
+    try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+    throw new Error('HTTP ' + res.status + ' (' + detail + ')');
+  }
+
   async function findSong(p, onStatus) {
     let genres = p.genres;
     if (!genres.length) {
@@ -224,46 +263,38 @@
     let rawHits = 0;
     for (const g of genres.slice(0, 12)) {
       if (onStatus) onStatus('Suche in „' + g + '“ …');
-      // limit: Spotify akzeptiert hier maximal 50 – mehr gibt HTTP 400 zurück.
-      const res = await apiFetch('/search?' + new URLSearchParams({ q: 'genre:' + g, type: 'track', limit: '50' }));
-      if (!res.ok) {
-        let detail = '';
-        try {
-          const b = await res.json();
-          detail = b && b.error ? (b.error.message || b.error.reason) : '';
-        } catch { /* Body kein JSON */ }
-        apiErrors.push(g + ' → HTTP ' + res.status + (detail ? ' (' + detail + ')' : ''));
-        continue;
-      }
-      const data = await res.json();
-      const items = (data && data.tracks && data.tracks.items) || [];
-      rawHits += items.length;
-      for (const t of items) {
-        if (!t || seen.has(t.id)) continue;
-        seen.add(t.id);
-        const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
-        if (!Number.isFinite(year) || year < p.yearFrom || year > p.yearTo) continue;
-        if (p.albumsOnly && (!t.album || t.album.type !== 'ALBUM')) continue;
-        if (p.hard && t.popularity > 60) continue;
-        const img = (t.album.images || [])[0];
-        pool.push({
-          id: t.id,
-          uri: t.uri,
-          name: t.name,
-          artists: t.artists.map((a) => a.name).join(', '),
-          year,
-          image: img ? img.url : '',
-          popularity: typeof t.popularity === 'number' ? t.popularity : 0,
-        });
+      try {
+        const items = await searchGenre(g);
+        rawHits += items.length;
+        for (const t of items) {
+          if (!t || seen.has(t.id)) continue;
+          seen.add(t.id);
+          const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
+          if (!Number.isFinite(year) || year < p.yearFrom || year > p.yearTo) continue;
+          if (p.albumsOnly && (!t.album || t.album.type !== 'ALBUM')) continue;
+          if (p.hard && t.popularity > 60) continue;
+          const img = (t.album.images || [])[0];
+          pool.push({
+            id: t.id,
+            uri: t.uri,
+            name: t.name,
+            artists: t.artists.map((a) => a.name).join(', '),
+            year,
+            image: img ? img.url : '',
+            popularity: typeof t.popularity === 'number' ? t.popularity : 0,
+          });
+        }
+      } catch (e) {
+        apiErrors.push(g + ' → ' + e.message);
       }
     }
     if (!pool.length && apiErrors.length) {
-      throw new Error('Spotify-API-Fehler bei der Suche: ' + apiErrors.join(', '));
+      throw new Error(apiErrors[0]); // erster Fehler reicht (meist alle gleich)
     }
-    if (apiErrors.length) console.warn('Teil-Suche fehlgeschlagen:', apiErrors.join(', '));
+    if (apiErrors.length) console.warn('Teil-Suche fehlgeschlagen:', apiErrors.join('; '));
     if (!pool.length) {
       const hint = rawHits === 0
-        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).' + (apiErrors.length ? ' (' + apiErrors.join(', ') + ')' : '')
+        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
         : rawHits + ' Tracks gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern).';
       return { _empty: hint };
     }
