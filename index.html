@@ -27,7 +27,34 @@
       </div>
 
       <div class="card">
-        <h2>2 · Filter</h2>
+        <h2>2 · Spielmodus</h2>
+        <div class="mode-grid">
+          <label class="mode" title="Tracks über Spotify-Genre-Suche finden">
+            <input type="radio" name="mode" id="mode-genre" value="genre" checked>
+            <div>
+              <span class="mode-name">🎵 Genre-Suche</span>
+              <span class="mode-desc">Songs über Genre + Filter per Spotify-Suche</span>
+            </div>
+          </label>
+          <label class="mode" title="Aktuelle deutsche Top 50 Charts (Spotify-Playlist)">
+            <input type="radio" name="mode" id="mode-charts" value="charts">
+            <div>
+              <span class="mode-name">🇩🇪 Top 50 Deutschland</span>
+              <span class="mode-desc">Aktuelle deutsche Charts (Spotify-Playlist, wöchentlich)</span>
+            </div>
+          </label>
+          <label class="mode" title="Historische deutsche #1-Hits (1954–2025)">
+            <input type="radio" name="mode" id="mode-legends" value="legends">
+            <div>
+              <span class="mode-name">🏆 Chart-Legenden</span>
+              <span class="mode-desc">Deutsche #1-Hits von 1954–2025 (kuratierte Liste)</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="card" id="card-filter-genre">
+        <h2>3 · Genre-Filter</h2>
         <div class="genre-grid" id="genres"></div>
         <p class="hint">Keine Auswahl = <b>alle Genres</b> (pro Runde zufällige Mix).</p>
 
@@ -47,13 +74,26 @@
         </div>
       </div>
 
+      <div class="card" id="card-filter-legends" hidden>
+        <h2>3 · Zeitraum (Chart-Legenden)</h2>
+        <div class="row year-row">
+          <label>Ab Jahr
+            <input id="legend-year-from" type="number" value="1980" min="1954" max="2025">
+          </label>
+          <label>bis
+            <input id="legend-year-to" type="number" value="2025" min="1954" max="2025">
+          </label>
+        </div>
+        <p class="hint">Aus 215 deutschen #1-Hits (1954–2025). Alte Titel sind teils nicht auf Spotify verfügbar – die App springt dann automatisch zum nächsten.</p>
+      </div>
+
       <div class="card">
-        <h2>3 · Abspielen</h2>
+        <h2>Abspielen</h2>
         <label class="inline">
           Abspielzeit vor dem Auto-Stopp:
           <input id="opt-seconds" type="number" value="20" min="5" max="180"> Sekunden
         </label>
-        <p class="hint">Nach dem Stopp erscheinen 2 Sekunden später der „Anzeigen“-Button und „Nächster Song“.</p>
+        <p class="hint">Nach dem Stopp erscheinen 2 Sekunden später der „Anzeigen"-Button und „Nächster Song".</p>
       </div>
 
       <button id="btn-start" class="btn big" disabled>▶ Spiel starten</button>
