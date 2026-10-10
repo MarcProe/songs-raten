@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.6';
+  const APP_VERSION = '1.7';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -337,8 +337,43 @@
   }
 
   /* ---------------- Spiel-Flow ---------------- */
-  const game = { params: null, round: 0, song: null, device: null, timers: [] };
-  const clearTimers = () => { game.timers.forEach(clearTimeout); game.timers = []; };
+  const game = { params: null, round: 0, song: null, device: null, timers: [], cdTimer: null, cdTotal: 0, cdLeft: 0 };
+  const clearTimers = () => {
+    game.timers.forEach(clearTimeout);
+    game.timers = [];
+    stopCountdown();
+  };
+
+  const cdEl = () => $('#countdown');
+  const cdNum = () => $('#countdown-num');
+  const cdFill = () => $('#countdown-fill');
+
+  function renderCountdown() {
+    cdNum().textContent = game.cdLeft;
+    const pct = game.cdTotal > 0 ? Math.max(0, (game.cdLeft / game.cdTotal) * 100) : 0;
+    cdFill().style.width = pct + '%';
+    const low = game.cdLeft <= 3;
+    cdNum().classList.toggle('low', low);
+    cdFill().classList.toggle('low', low);
+  }
+
+  function startCountdown(seconds) {
+    stopCountdown();
+    game.cdTotal = seconds;
+    game.cdLeft = seconds;
+    cdEl().hidden = false;
+    renderCountdown();
+    game.cdTimer = setInterval(() => {
+      game.cdLeft -= 1;
+      if (game.cdLeft <= 0) { game.cdLeft = 0; renderCountdown(); stopCountdown(); return; }
+      renderCountdown();
+    }, 1000);
+  }
+
+  function stopCountdown() {
+    if (game.cdTimer) { clearInterval(game.cdTimer); game.cdTimer = null; }
+    if (cdEl()) cdEl().hidden = true;
+  }
   const setGameStatus = (html, cls = '') => {
     const el = $('#game-status');
     el.innerHTML = html;
@@ -365,7 +400,8 @@
       game.song = song;
       setGameStatus('▶ Starte Playback auf deinem Spotify-Gerät …');
       game.device = await startPlayback(song);
-      setGameStatus('🎧 Song läuft – Stopp nach <b>' + game.params.seconds + ' s</b>. Guter Moment zum Raten …', 'playing');
+      setGameStatus('🎧 Song läuft – Guter Moment zum Raten …', 'playing');
+      startCountdown(game.params.seconds);
       game.timers.push(setTimeout(onStopped, game.params.seconds * 1000));
     } catch (e) {
       $('#game-error').textContent = e.message;
@@ -375,6 +411,7 @@
   }
 
   function onStopped() {
+    stopCountdown();
     pausePlayback(game.device);
     setGameStatus('⏹ Stopp! Raten ist eröffnet: <b>Titel, Interpret &amp; Jahr?</b>', 'stopped');
     game.timers.push(setTimeout(() => {

@@ -121,6 +121,33 @@ input[type="number"] { width: 92px; }
 .game-status.playing { color: var(--green); }
 .game-status.stopped { color: var(--warn); }
 
+.countdown { margin: 18px 0 6px; width: min(360px, 80%); text-align: center; }
+.countdown-num {
+  font-size: 84px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -2px;
+  color: var(--text);
+  transition: color .25s ease, transform .12s ease;
+}
+.countdown-num.low { color: var(--err); transform: scale(1.08); }
+.countdown-bar {
+  margin-top: 14px;
+  height: 6px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.countdown-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--green);
+  border-radius: 999px;
+  transition: width 1s linear, background .25s ease;
+}
+.countdown-fill.low { background: var(--err); }
+
 .song-card { text-align: center; margin-top: 6px; }
 .song-card img {
   width: 180px;
