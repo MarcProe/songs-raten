@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.8';
+  const APP_VERSION = '1.8.1';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -181,19 +181,70 @@
     } catch { return false; }
   }
 
-  async function apiFetch(path, opts = {}, retry = true) {
+  /* ---------------- Rate-Limit-Schutz (Dev Mode) ----------------
+     Spotify limitiert Dev-Apps in einem Rolling 30s-Fenster. Zu viele Calls
+     liefern 429; danach antwortet Spotify bei weiterem Aufruf oft mit 403
+     (Quota-Erschöpfung – dokumentiertes Dev-Mode-Verhalten). Deshalb:
+     (1) Throttle zwischen Calls, (2) 429/403 → Retry-After + Backoff + Retry. */
+  const THROTTLE_MS = 600;   // min. Abstand zwischen zwei API-Calls
+  const MAX_RETRIES = 3;     // Retries bei 429/403
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let _lastCallAt = 0;
+  async function throttle() {
+    const wait = _lastCallAt + THROTTLE_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    _lastCallAt = Date.now();
+  }
+
+  async function apiFetch(path, opts = {}, authRetry = true) {
     let token = validAccessToken();
     if (!token) {
       await refreshAuth();
       token = validAccessToken();
       if (!token) throw new Error('Spotify-Authentifizierung fehlt – bitte in der Anfangsmaske anmelden.');
     }
-    const res = await fetch('https://api.spotify.com/v1' + path, {
-      ...opts,
-      headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token },
-    });
-    if (res.status === 401 && retry) return apiFetch(path, opts, false);
-    return res;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      await throttle();
+      const res = await fetch('https://api.spotify.com/v1' + path, {
+        ...opts,
+        headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token },
+      });
+
+      // Token abgelaufen → einmal Refresh + erneut
+      if (res.status === 401 && authRetry) {
+        await refreshAuth();
+        token = validAccessToken();
+        if (!token) throw new Error('Spotify-Authentifizierung fehlt – bitte in der Anfangsmaske anmelden.');
+        authRetry = false;
+        continue;
+      }
+
+      // Rate-Limit (429) oder Quota-Erschöpfung (403 im Dev Mode)
+      if ((res.status === 429 || res.status === 403) && attempt < MAX_RETRIES) {
+        let waitMs = 0;
+        const ra = res.headers.get('Retry-After');
+        if (ra && /^\d+$/.test(ra)) waitMs = parseInt(ra, 10) * 1000;
+        if (waitMs <= 0) waitMs = [5000, 15000, 45000][attempt] || 15000; // Backoff
+        if (waitMs > 30000) {
+          const sec = Math.round(waitMs / 1000);
+          throw new Error('Spotify rate-limits gerade (HTTP ' + res.status + '). Bitte ca. ' + sec + ' Sekunden warten, dann „Nächster Song“ erneut.');
+        }
+        await sleep(waitMs);
+        continue;
+      }
+
+      // Rate-Limit/Quota ohne weitere Retry-Möglichkeiten: klare Meldung
+      if (res.status === 429) {
+        throw new Error('Spotify rate-limits gerade (HTTP 429) – Dev-Quota im 30s-Fenster erschöpft. 30–60 Sekunden warten, dann erneut.');
+      }
+      if (res.status === 403) {
+        throw new Error('Spotify verweigert gerade Zugriff (HTTP 403) – meist Dev-Quota im 30s-Fenster erschöpft. 30–60 Sekunden warten, dann erneut.');
+      }
+
+      return res;
+    }
+    return res; // Sicherheitsnetz (erreicht sich praktisch nie)
   }
 
   /* ---------------- Parameter ---------------- */
@@ -213,7 +264,7 @@
     };
   }
 
-  /* ---------------- Song-Suche (Genre) ----------------
+  /* ---------------- Song-Suche ----------------
      Pro Genre werden Tracks über paginierte /search-Requests geholt.
      Seit Feb 2026: max 10 Treffer pro Request (Dev Mode) bzw. 50 (Extended Quota).
      Wir versuchen limit=50; bei 400 ("Invalid limit" – oft Dev-Quota-Fehler)
@@ -251,7 +302,7 @@
     return (d.tracks && d.tracks.items) || [];
   }
 
-  function trackToPool(t) {
+  async function trackToPool(t) {
     const year = t.album && t.album.release_date ? parseInt(t.album.release_date.slice(0, 4), 10) : NaN;
     const img = (t.album.images || [])[0];
     return {
@@ -314,11 +365,15 @@
         if (items.length) {
           let pick = items.find((it) => norm(it.name) === norm(s.t));
           if (!pick) pick = items.slice().sort((a, b) => (b.popularity || 0) - (a.popularity || 0))[0];
-          const obj = trackToPool(pick);
+          const obj = await trackToPool(pick);
           obj.year = Number.isFinite(obj.year) ? obj.year : s.y;
           return obj;
         }
-      } catch { /* Kandidat nicht verfügbar – nächsten versuchen */ }
+      } catch (e) {
+        // Rate-Limit/Quota (429/403) nicht verschlucken – sofort aufhören
+        if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
+        /* Titel nicht auf Spotify – nächsten versuchen */
+      }
     }
     return { _empty: 'Keiner der Kandidaten wurde auf Spotify gefunden (10 Versuche). Zeitraum ggf. ab ~1980 wählen.' };
   }
@@ -389,6 +444,9 @@
           });
         }
       } catch (e) {
+        // Rate-Limit/Quota (429/403): Quota ist erschöpft – Rest der Runde nicht
+        // weiter aufreizen, sofort abbrechen und klare Meldung zeigen.
+        if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
         apiErrors.push(g + ' → ' + e.message);
       }
     }
