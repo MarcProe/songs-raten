@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.8.1';
+  const APP_VERSION = '1.9';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -48,7 +48,6 @@
     { label: 'Latin', q: 'latin' },
   ];
 
-  // Pool für "Alle": pro Runde wird zufällig daraus gezogen
   const ALL_GENRE_POOL = [
     'pop', 'rock', 'hip hop', 'dance', 'techno', 'house', 'disco', 'funk',
     'soul', 'rnb', 'jazz', 'blues', 'classical', 'opera', 'metal', 'punk',
@@ -64,8 +63,6 @@
   clientIdInput.value = localStorage.getItem(CLIENT_KEY) || '';
   const effectiveClientId = () => (clientIdInput.value || '').trim() || configClientId;
   const redirectUri = () => {
-    // GitHub Pages: https://<user>.github.io/songs-raten/
-    // Lokal:        http://localhost:8000/index.html
     const base = location.origin + location.pathname;
     return base.endsWith('/') ? base + 'index.html' : base;
   };
@@ -105,7 +102,7 @@
         const cfg = await res.json();
         if (cfg && cfg.spotify_client_id) configClientId = cfg.spotify_client_id;
       }
-    } catch { /* config.json nicht verfügbar */ }
+    } catch { }
   }
 
   $('#btn-login').addEventListener('click', async () => {
@@ -181,13 +178,9 @@
     } catch { return false; }
   }
 
-  /* ---------------- Rate-Limit-Schutz (Dev Mode) ----------------
-     Spotify limitiert Dev-Apps in einem Rolling 30s-Fenster. Zu viele Calls
-     liefern 429; danach antwortet Spotify bei weiterem Aufruf oft mit 403
-     (Quota-Erschöpfung – dokumentiertes Dev-Mode-Verhalten). Deshalb:
-     (1) Throttle zwischen Calls, (2) 429/403 → Retry-After + Backoff + Retry. */
-  const THROTTLE_MS = 600;   // min. Abstand zwischen zwei API-Calls
-  const MAX_RETRIES = 3;     // Retries bei 429/403
+  /* ---------------- Rate-Limit-Schutz (Dev Mode) ---------------- */
+  const THROTTLE_MS = 600;
+  const MAX_RETRIES = 3;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let _lastCallAt = 0;
   async function throttle() {
@@ -211,7 +204,6 @@
         headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token },
       });
 
-      // Token abgelaufen → einmal Refresh + erneut
       if (res.status === 401 && authRetry) {
         await refreshAuth();
         token = validAccessToken();
@@ -220,12 +212,11 @@
         continue;
       }
 
-      // Rate-Limit (429) oder Quota-Erschöpfung (403 im Dev Mode)
       if ((res.status === 429 || res.status === 403) && attempt < MAX_RETRIES) {
         let waitMs = 0;
         const ra = res.headers.get('Retry-After');
         if (ra && /^\d+$/.test(ra)) waitMs = parseInt(ra, 10) * 1000;
-        if (waitMs <= 0) waitMs = [5000, 15000, 45000][attempt] || 15000; // Backoff
+        if (waitMs <= 0) waitMs = [5000, 15000, 45000][attempt] || 15000;
         if (waitMs > 30000) {
           const sec = Math.round(waitMs / 1000);
           throw new Error('Spotify rate-limits gerade (HTTP ' + res.status + '). Bitte ca. ' + sec + ' Sekunden warten, dann „Nächster Song“ erneut.');
@@ -234,7 +225,6 @@
         continue;
       }
 
-      // Rate-Limit/Quota ohne weitere Retry-Möglichkeiten: klare Meldung
       if (res.status === 429) {
         throw new Error('Spotify rate-limits gerade (HTTP 429) – Dev-Quota im 30s-Fenster erschöpft. 30–60 Sekunden warten, dann erneut.');
       }
@@ -244,7 +234,7 @@
 
       return res;
     }
-    return res; // Sicherheitsnetz (erreicht sich praktisch nie)
+    return res;
   }
 
   /* ---------------- Parameter ---------------- */
@@ -261,21 +251,18 @@
       legendYearFrom: parseInt($('#legend-year-from').value, 10),
       legendYearTo: parseInt($('#legend-year-to').value, 10),
       seconds: Math.min(180, Math.max(5, parseInt($('#opt-seconds').value, 10) || 20)),
+      thinkSeconds: Math.min(120, Math.max(3, parseInt($('#opt-think').value, 10) || 10)),
+      extendSeconds: Math.min(120, Math.max(3, parseInt($('#opt-extend').value, 10) || 10)),
     };
   }
 
-  /* ---------------- Song-Suche ----------------
-     Pro Genre werden Tracks über paginierte /search-Requests geholt.
-     Seit Feb 2026: max 10 Treffer pro Request (Dev Mode) bzw. 50 (Extended Quota).
-     Wir versuchen limit=50; bei 400 ("Invalid limit" – oft Dev-Quota-Fehler)
-     fallen wir auf limit=10 + Pagination zurück.
-     "Top-100" = die bis zu 100 populärsten, die ALLE Filter erfüllen.  */
+  /* ---------------- Song-Suche ---------------- */
   const SEARCH_LIMIT_HIGH = '50';
   const SEARCH_LIMIT_LOW = '10';
-  const MAX_PAGES = 5; // max. 50 (50) oder 50 (5×10) Tracks pro Genre
+  const MAX_PAGES = 5;
 
   /* ---------------- Spielmodi: Top 50 DE & Chart-Legenden ---------------- */
-  const DE_TOP50_PLAYLIST = '37i9dQZEVXbJiZcmkrIHGU'; // Spotify „Top 50 - Germany“
+  const DE_TOP50_PLAYLIST = '37i9dQZEVXbJiZcmkrIHGU';
   let legendsCache = null;
 
   async function loadLegends() {
@@ -290,12 +277,11 @@
     return legendsCache;
   }
 
-  // Punktgenaue Titelsuche – limit=10 läuft in jedem Quota-Modus.
   async function searchTrack(query) {
     const res = await apiFetch('/search?' + new URLSearchParams({ q: query, type: 'track', limit: '10' }));
     if (!res.ok) {
       let detail = '';
-      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
       throw new Error('Spotify-Suche: HTTP ' + res.status + ' (' + detail + ')');
     }
     const d = await res.json();
@@ -316,7 +302,16 @@
     };
   }
 
-  // Modus: Top 50 Deutschland (aktuelle Charts-Playlist)
+  // Session-History: kein Song kommt innerhalb einer Sitzung doppelt.
+  function pickFromPool(pool) {
+    const valid = pool.filter(Boolean);
+    if (!valid.length) return null;
+    let cand = valid.filter((t) => !game.played.has(t.id));
+    if (!cand.length) { game.played.clear(); cand = valid; }
+    return cand[(Math.random() * cand.length) | 0];
+  }
+
+  // Modus: Top 50 Deutschland
   async function findSongCharts(p, onStatus) {
     if (onStatus) onStatus('Lade deutsche Top 50 …');
     const items = [];
@@ -325,12 +320,11 @@
       const d = await res.json();
       for (const it of d.items || []) if (it && it.track) items.push(it.track);
     } else if (res.status === 400) {
-      // Dev-Mode-Fallback: 10er-Seiten
       for (let off = 0; off < 50; off += 10) {
         const r2 = await apiFetch('/playlists/' + DE_TOP50_PLAYLIST + '/tracks?limit=10&offset=' + off);
         if (!r2.ok) {
           let detail = '';
-          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
           throw new Error('Playlist-Abfrage: HTTP ' + r2.status + ' (' + detail + ')');
         }
         const d2 = await r2.json();
@@ -340,15 +334,15 @@
       }
     } else {
       let detail = '';
-      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+      try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
       throw new Error('Playlist-Abfrage: HTTP ' + res.status + ' (' + detail + ')');
     }
     if (!items.length) return { _empty: 'Die Top-50-Playlist lieferte keine Songs.' };
     const pool = items.filter(Boolean).map(trackToPool);
-    return pool[(Math.random() * pool.length) | 0];
+    return pickFromPool(pool) || { _empty: 'Alle Songs der Top 50 wurden bereits gespielt – Sitzung zurückgesetzt.' };
   }
 
-  // Modus: Chart-Legenden (kuratierte #1-Hits, per Titelsuche auf Spotify)
+  // Modus: Chart-Legenden
   async function findSongLegends(p, onStatus) {
     if (onStatus) onStatus('Lade Chart-Legenden …');
     const all = await loadLegends();
@@ -362,24 +356,23 @@
       if (onStatus) onStatus('Suche: „' + s.t + '“ …');
       try {
         const items = await searchTrack(s.t + ' ' + s.a);
-        if (items.length) {
-          let pick = items.find((it) => norm(it.name) === norm(s.t));
-          if (!pick) pick = items.slice().sort((a, b) => (b.popularity || 0) - (a.popularity || 0))[0];
+        const fresh = items.filter((it) => it && !game.played.has(it.id));
+        if (fresh.length) {
+          let pick = fresh.find((it) => norm(it.name) === norm(s.t));
+          if (!pick) pick = fresh.slice().sort((a, b) => (b.popularity || 0) - (a.popularity || 0))[0];
           const obj = await trackToPool(pick);
           obj.year = Number.isFinite(obj.year) ? obj.year : s.y;
           return obj;
         }
+        if (items.length) continue; // nur schon gespielte Treffer – nächsten Kandidaten
       } catch (e) {
-        // Rate-Limit/Quota (429/403) nicht verschlucken – sofort aufhören
         if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
-        /* Titel nicht auf Spotify – nächsten versuchen */
       }
     }
     return { _empty: 'Keiner der Kandidaten wurde auf Spotify gefunden (10 Versuche). Zeitraum ggf. ab ~1980 wählen.' };
   }
 
   async function searchGenre(genre, offset = 0) {
-    // Erstversuch: limit=50 (Extended Quota / ältere Apps)
     const qs = new URLSearchParams({ q: 'genre:' + genre, type: 'track', limit: SEARCH_LIMIT_HIGH });
     if (offset) qs.set('offset', String(offset));
     const res = await apiFetch('/search?' + qs.toString());
@@ -387,7 +380,6 @@
       const data = await res.json();
       return (data.tracks && data.tracks.items) || [];
     }
-    // Fallback: Dev Mode → max 10 pro Request, paginieren
     if (res.status === 400) {
       const items = [];
       const startPage = Math.floor(offset / 10);
@@ -396,26 +388,22 @@
         const r2 = await apiFetch('/search?' + q2.toString());
         if (!r2.ok) {
           let detail = '';
-          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
-          throw new Error('Spotify /search: HTTP ' + r2.status + ' (' + detail + ') – ' +
-            'Sehr wahrscheinlich: Dev-App ohne Extended Quota Mode. In developer.spotify.com/dashboard → App → Settings → Extended Quota Mode aktivieren.');
+          try { const b = await r2.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
+          throw new Error('Spotify /search: HTTP ' + r2.status + ' (' + detail + ')');
         }
         const d2 = await r2.json();
         const batch = (d2.tracks && d2.tracks.items) || [];
         items.push(...batch);
-        if (batch.length < 10) break; // letzte Seite
+        if (batch.length < 10) break;
       }
       return items;
     }
-    // Andere Fehler (401, 429, 5xx)
     let detail = '';
-    try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch {}
+    try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
     throw new Error('HTTP ' + res.status + ' (' + detail + ')');
   }
 
-  // Genre-Modus: Pro Runde wird EINES Genre per Zufall gewählt (aus der Auswahl,
-  // bei „Alle“ aus dem 32er-Pool), und der Song kommt nur aus diesem Genre.
-  // → max. 1 Such-Call pro Runde (limit=50) – deutlich schonender für die Quota.
+  // Genre-Modus: 1 Genre per Zufall → 1 Such-Call → Song nur aus diesem Genre
   async function findSong(p, onStatus) {
     const genrePool = p.genres.length ? p.genres : ALL_GENRE_POOL;
     const genre = genrePool[(Math.random() * genrePool.length) | 0];
@@ -423,7 +411,6 @@
     let items;
     try {
       items = await searchGenre(genre);
-      // Top-100 aktiv: 2. Seite holen (limit=50/Request → max. 100 Tracks)
       if (p.top100 && items.length >= 50) {
         const more = await searchGenre(genre, 50);
         if (more.length) {
@@ -444,27 +431,24 @@
       if (p.hard && t.popularity > 60) continue;
       const img = (t.album.images || [])[0];
       pool.push({
-        id: t.id,
-        uri: t.uri,
-        name: t.name,
+        id: t.id, uri: t.uri, name: t.name,
         artists: t.artists.map((a) => a.name).join(', '),
-        year,
-        image: img ? img.url : '',
+        year, image: img ? img.url : '',
         popularity: typeof t.popularity === 'number' ? t.popularity : 0,
       });
     }
     if (!pool.length) {
       const hint = items.length === 0
         ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
-        : items.length + ' Tracks in „' + genre + '“ gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (ggf. Filter lockern oder „Nächster Song“ erneut).';
+        : items.length + ' Tracks in „' + genre + '“ gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (Filter lockern oder „Nächster Song“ erneut).';
       return { _empty: hint };
     }
     if (p.top100) {
       pool.sort((a, b) => b.popularity - a.popularity);
       const top = pool.slice(0, 100);
-      return top[(Math.random() * top.length) | 0];
+      return pickFromPool(top) || { _empty: 'Alle Top-100 aus „' + genre + '“ wurden bereits gespielt – Pool zurückgesetzt.' };
     }
-    return pool[(Math.random() * pool.length) | 0];
+    return pickFromPool(pool) || { _empty: 'Alle Songs aus „' + genre + '“ wurden bereits gespielt – Pool zurückgesetzt.' };
   }
 
   /* ---------------- Playback ---------------- */
@@ -494,17 +478,66 @@
 
   function pausePlayback(deviceId) {
     const path = deviceId ? '/me/player/pause?device_id=' + encodeURIComponent(deviceId) : '/me/player/pause';
-    apiFetch(path, { method: 'PUT' }).catch(() => {});
+    apiFetch(path, { method: 'PUT' }).catch(() => { });
+  }
+
+  /* ---------------- Web Audio: Fanfare ---------------- */
+  let _audioCtx = null;
+  function getAudioCtx() {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    return _audioCtx;
+  }
+  function playFanfare() {
+    try {
+      const ctx = getAudioCtx();
+      const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 D5 G5 C6
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.4);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime + i * 0.15 + 0.5);
+      });
+    } catch { /* Audio nicht verfügbar */ }
   }
 
   /* ---------------- Spiel-Flow ---------------- */
-  const game = { params: null, round: 0, song: null, device: null, timers: [], cdTimer: null, cdTotal: 0, cdLeft: 0 };
-  const clearTimers = () => {
-    game.timers.forEach(clearTimeout);
-    game.timers = [];
-    stopCountdown();
+  const game = {
+    params: null, round: 0, song: null, device: null,
+    timers: [], cdTimer: null, cdTotal: 0, cdLeft: 0, cdMode: 'play',
+    played: new Set(),
   };
 
+  function clearTimers() {
+    game.timers.forEach(clearTimeout);
+    game.timers = [];
+    hideCountdown();
+    hidePlayingControls();
+    showSearching(false);
+  }
+
+  /* --- UI: Such-Animation --- */
+  function showSearching(on) {
+    const el = $('#search-anim');
+    if (el) el.hidden = !on;
+  }
+
+  /* --- UI: Playing-Controls (SKIP + VERLÄNGERN) --- */
+  function showPlayingControls() {
+    $('#btn-skip').hidden = false;
+    $('#btn-extend').hidden = false;
+  }
+  function hidePlayingControls() {
+    $('#btn-skip').hidden = true;
+    $('#btn-extend').hidden = true;
+  }
+
+  /* --- Countdown --- */
   const cdEl = () => $('#countdown');
   const cdNum = () => $('#countdown-num');
   const cdFill = () => $('#countdown-fill');
@@ -518,23 +551,72 @@
     cdFill().classList.toggle('low', low);
   }
 
-  function startCountdown(seconds) {
+  function startCountdown(seconds, mode) {
     stopCountdown();
+    game.cdMode = mode || 'play';
     game.cdTotal = seconds;
     game.cdLeft = seconds;
-    cdEl().hidden = false;
+    const el = cdEl();
+    el.hidden = false;
+    el.classList.toggle('think', game.cdMode === 'think');
     renderCountdown();
     game.cdTimer = setInterval(() => {
       game.cdLeft -= 1;
-      if (game.cdLeft <= 0) { game.cdLeft = 0; renderCountdown(); stopCountdown(); return; }
+      if (game.cdLeft <= 0) { game.cdLeft = 0; renderCountdown(); stopCountdown(); onCountdownEnd(); return; }
       renderCountdown();
     }, 1000);
   }
 
   function stopCountdown() {
     if (game.cdTimer) { clearInterval(game.cdTimer); game.cdTimer = null; }
-    if (cdEl()) cdEl().hidden = true;
   }
+
+  function hideCountdown() {
+    stopCountdown();
+    const el = cdEl();
+    if (el) { el.hidden = true; el.classList.remove('think'); }
+  }
+
+  function onCountdownEnd() {
+    if (game.cdMode === 'think') onThinkEnd();
+    else onStopped();
+  }
+
+  /* --- VERLÄNGERN: nur solange der Song läuft --- */
+  function extendTime() {
+    if (game.cdMode !== 'play' || !game.cdTimer) return;
+    const ext = game.params.extendSeconds;
+    game.cdTotal += ext;
+    game.cdLeft += ext;
+    renderCountdown();
+    setGameStatus('🎧 +' + ext + 's – Song läuft weiter …', 'playing');
+  }
+
+  /* --- SKIP: Song überspringen, direkt zur nächsten Runde --- */
+  function skipSong() {
+    pausePlayback(game.device);
+    clearTimers();
+    hidePlayingControls();
+    hideCountdown();
+    setGameStatus('⏭ Song übersprungen – nächster kommt …');
+    game.timers.push(setTimeout(nextSong, 400));
+  }
+
+  /* --- Nachdenken-Phase nach Song-Ende --- */
+  function onStopped() {
+    pausePlayback(game.device);
+    hidePlayingControls();
+    setGameStatus('🤔 Song beendet – noch kurz nachdenken …', 'stopped');
+    startCountdown(game.params.thinkSeconds, 'think');
+  }
+
+  function onThinkEnd() {
+    playFanfare();
+    setGameStatus('🎉 Zeit abgelaufen! Raten ist eröffnet: <b>Titel, Interpret &amp; Jahr?</b>', 'stopped');
+    $('#btn-reveal').hidden = false;
+    $('#btn-next').disabled = false;
+  }
+
   const setGameStatus = (html, cls = '') => {
     const el = $('#game-status');
     el.innerHTML = html;
@@ -550,6 +632,7 @@
     game.song = null;
     game.round += 1;
     $('#round-counter').textContent = 'Runde ' + game.round;
+    showSearching(true);
     setGameStatus('🎵 Song wird gesucht …');
     try {
       const song = game.params.mode === 'charts'
@@ -557,32 +640,25 @@
         : game.params.mode === 'legends'
           ? await findSongLegends(game.params, setGameStatus)
           : await findSong(game.params, setGameStatus);
+      showSearching(false);
       if (!song || song._empty) {
-        setGameStatus('❌ Kein passender Song gefunden.<br><span class="hint">' + (song && song._empty ? song._empty : 'Jahresbereich, Genre oder Filter lockern.') + '</span>');
+        setGameStatus('❌ Kein passender Song gefunden.<br><span class="hint">' + (song && song._empty ? song._empty : 'Filter lockern.') + '</span>');
         $('#btn-next').disabled = false;
         return;
       }
       game.song = song;
+      game.played.add(song.id);
       setGameStatus('▶ Starte Playback auf deinem Spotify-Gerät …');
       game.device = await startPlayback(song);
+      showPlayingControls();
       setGameStatus('🎧 Song läuft – Guter Moment zum Raten …', 'playing');
-      startCountdown(game.params.seconds);
-      game.timers.push(setTimeout(onStopped, game.params.seconds * 1000));
+      startCountdown(game.params.seconds, 'play'); // Ende des Countdowns = Song-Stopp (onStopped)
     } catch (e) {
+      showSearching(false);
       $('#game-error').textContent = e.message;
-      setGameStatus('⚠️ Fehler bei der Song-Auswahl oder beim Start des Playbacks. Details unten.');
+      setGameStatus('⚠️ Fehler bei der Song-Auswahl oder beim Start des Playbacks.');
       $('#btn-next').disabled = false;
     }
-  }
-
-  function onStopped() {
-    stopCountdown();
-    pausePlayback(game.device);
-    setGameStatus('⏹ Stopp! Raten ist eröffnet: <b>Titel, Interpret &amp; Jahr?</b>', 'stopped');
-    game.timers.push(setTimeout(() => {
-      $('#btn-reveal').hidden = false;
-      $('#btn-next').disabled = false;
-    }, 2000));
   }
 
   function reveal() {
@@ -617,6 +693,7 @@
     err.textContent = '';
     game.params = p;
     game.round = 0;
+    game.played.clear(); // neue Sitzung → History zurücksetzen
     $('#view-setup').hidden = true;
     $('#view-game').hidden = false;
     nextSong();
@@ -630,12 +707,17 @@
     $('#song-card').hidden = true;
     $('#btn-reveal').hidden = true;
     $('#btn-next').disabled = true;
+    hidePlayingControls();
+    showSearching(false);
+    hideCountdown();
     $('#view-game').hidden = true;
     $('#view-setup').hidden = false;
   });
 
   $('#btn-next').addEventListener('click', nextSong);
   $('#btn-reveal').addEventListener('click', reveal);
+  $('#btn-skip').addEventListener('click', skipSong);
+  $('#btn-extend').addEventListener('click', extendTime);
 
   /* ---------------- Init ---------------- */
   async function init() {
@@ -659,7 +741,6 @@
       wrap.appendChild(lab);
     }
 
-    // Spielmodus-UI: Filter-Karten je nach Modus ein-/ausblenden
     const syncModeUI = () => {
       const m = (document.querySelector('input[name="mode"]:checked') || {}).value || 'genre';
       $('#card-filter-genre').hidden = m !== 'genre';
@@ -668,7 +749,7 @@
     };
     document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', syncModeUI));
     syncModeUI();
-    loadLegends().catch(() => {}); // Legenden vorladen (nicht blockierend)
+    loadLegends().catch(() => { });
 
     await loadConfig();
 

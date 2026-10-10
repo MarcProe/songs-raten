@@ -33,7 +33,7 @@
             <input type="radio" name="mode" id="mode-genre" value="genre" checked>
             <div>
               <span class="mode-name">🎵 Genre-Suche</span>
-              <span class="mode-desc">Songs über Genre + Filter per Spotify-Suche</span>
+              <span class="mode-desc">Pro Runde ein zufälliges Genre, Song nur aus diesem Genre</span>
             </div>
           </label>
           <label class="mode" title="Aktuelle deutsche Top 50 Charts (Spotify-Playlist)">
@@ -56,7 +56,7 @@
       <div class="card" id="card-filter-genre">
         <h2>3 · Genre-Filter</h2>
         <div class="genre-grid" id="genres"></div>
-        <p class="hint">Keine Auswahl = <b>alle Genres</b> (pro Runde zufällige Mix).</p>
+        <p class="hint">Keine Auswahl = <b>alle Genres</b> (pro Runde wird eines zufällig gewählt).</p>
 
         <div class="row year-row">
           <label>Jahre von
@@ -84,16 +84,23 @@
             <input id="legend-year-to" type="number" value="2025" min="1954" max="2025">
           </label>
         </div>
-        <p class="hint">Aus 215 deutschen #1-Hits (1954–2025). Alte Titel sind teils nicht auf Spotify verfügbar – die App springt dann automatisch zum nächsten.</p>
+        <p class="hint">Aus 217 deutschen #1-Hits (1954–2025). Alte Titel sind teils nicht auf Spotify verfügbar – die App springt dann automatisch zum nächsten.</p>
       </div>
 
       <div class="card">
-        <h2>Abspielen</h2>
-        <label class="inline">
-          Abspielzeit vor dem Auto-Stopp:
-          <input id="opt-seconds" type="number" value="20" min="5" max="180"> Sekunden
-        </label>
-        <p class="hint">Nach dem Stopp erscheinen 2 Sekunden später der „Anzeigen"-Button und „Nächster Song".</p>
+        <h2>Abspielen &amp; Raten</h2>
+        <div class="row year-row">
+          <label>♫ Abspielzeit:
+            <input id="opt-seconds" type="number" value="20" min="5" max="180"> s
+          </label>
+          <label>🤔 Nachdenken:
+            <input id="opt-think" type="number" value="10" min="3" max="120"> s
+          </label>
+          <label>⏱ Verlängern um:
+            <input id="opt-extend" type="number" value="10" min="3" max="120"> s
+          </label>
+        </div>
+        <p class="hint">Nach dem Abspielen läuft ein „Nachdenken"-Countdown mit Fanfare am Ende. Während des Songs kannst du <b>Skip</b> (überspringen) oder <b>Verlängern</b> (mehr Zeit) drücken.</p>
       </div>
 
       <button id="btn-start" class="btn big" disabled>▶ Spiel starten</button>
@@ -108,12 +115,32 @@
       </div>
 
       <div class="card center" id="game-stage">
+        <!-- Such-Animation (Equalizer) -->
+        <div id="search-anim" class="search-anim" hidden>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+        </div>
+
         <div id="game-status" class="game-status"></div>
+
         <div id="countdown" class="countdown" hidden>
           <div id="countdown-num" class="countdown-num">0</div>
           <div class="countdown-bar"><div id="countdown-fill" class="countdown-fill"></div></div>
         </div>
+
+        <!-- Playing-Controls: SKIP + VERLÄNGERN -->
+        <div class="play-controls" id="play-controls">
+          <button id="btn-skip" class="btn ghost" hidden>⏭ Skip</button>
+          <button id="btn-extend" class="btn ghost" hidden>⏱ Verlängern</button>
+        </div>
+
         <button id="btn-reveal" class="btn big" hidden>👀 Anzeigen</button>
+
         <div id="song-card" class="song-card" hidden>
           <img id="song-img" alt="Albumcover">
           <h3 id="song-title"></h3>
