@@ -1,1 +1,164 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Songs Raten – Spotify Party-Spiel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🎧 Songs Raten</h1>
+  </header>
+
+  <main>
+    <!-- ================= Anfangsmaske ================= -->
+    <section id="view-setup" class="view">
+
+      <div class="card">
+        <h2>1 · Spotify verbinden</h2>
+        <div id="auth-status" class="status">Prüfe …</div>
+        <div class="row">
+          <input id="client-id" type="text" placeholder="Spotify Client ID (optional – sonst config.json)" autocomplete="off">
+          <button id="btn-login" class="btn">Mit Spotify anmelden</button>
+          <button id="btn-logout" class="btn ghost" hidden>Abmelden</button>
+        </div>
+        <p class="hint">Login läuft per PKCE direkt im Browser – kein Backend nötig. Client ID aus <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com</a>.</p>
+        <div class="row" style="margin-top:8px">
           <input id="proxy-url" type="text" placeholder="Optional: http://localhost:8001 (lokaler Proxy: node proxy/local.js)" autocomplete="off" style="flex:1;max-width:420px">
+        </div>
+        <p class="hint" style="margin-top:4px">Ohne Proxy: Retry-After-Header nicht lesbar (CORS). Mit Proxy: exakte Quota-Restzeit in der Fehlermeldung.</p>
+      </div>
+
+      <div class="card">
+        <h2>2 · Spielmodus</h2>
+        <div class="mode-grid">
+          <label class="mode" title="Tracks über Spotify-Genre-Suche finden">
+            <input type="radio" name="mode" id="mode-genre" value="genre" checked>
+            <div>
+              <span class="mode-name">🎵 Genre-Suche</span>
+              <span class="mode-desc">Pro Runde ein zufälliges Genre, Song nur aus diesem Genre</span>
+            </div>
+          </label>
+          <label class="mode" title="Aktuelle deutsche Top 50 Charts (Spotify-Playlist)">
+            <input type="radio" name="mode" id="mode-charts" value="charts">
+            <div>
+              <span class="mode-name">🇩🇪 Top 50 Deutschland</span>
+              <span class="mode-desc">Aktuelle deutsche Charts (Spotify-Playlist, wöchentlich)</span>
+            </div>
+          </label>
+          <label class="mode" title="Historische deutsche #1-Hits (1954–2025)">
+            <input type="radio" name="mode" id="mode-legends" value="legends">
+            <div>
+              <span class="mode-name">🏆 Chart-Legenden</span>
+              <span class="mode-desc">Deutsche #1-Hits von 1954–2025 (kuratierte Liste)</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="card" id="card-filter-genre">
+        <h2>3 · Genre-Filter</h2>
+        <div class="genre-grid" id="genres"></div>
+        <p class="hint">Keine Auswahl = <b>alle Genres</b> (pro Runde wird eines zufällig gewählt).</p>
+
+        <div class="row year-row">
+          <label>Jahre von
+            <input id="year-from" type="number" value="1990" min="1900" max="2026">
+          </label>
+          <label>bis
+            <input id="year-to" type="number" value="2020" min="1900" max="2026">
+          </label>
+        </div>
+
+        <div class="checks">
+          <label><input type="checkbox" id="opt-top100"> Nur Top-100 (die 100 populärsten Songs)</label>
+          <label><input type="checkbox" id="opt-albums"> Nur Alben (keine Singles)</label>
+          <label><input type="checkbox" id="opt-hard"> Schwierig (extrem beliebte Songs ausschließen)</label>
+        </div>
+      </div>
+
+      <div class="card" id="card-filter-legends" hidden>
+        <h2>3 · Zeitraum (Chart-Legenden)</h2>
+        <div class="row year-row">
+          <label>Ab Jahr
+            <input id="legend-year-from" type="number" value="1980" min="1954" max="2025">
+          </label>
+          <label>bis
+            <input id="legend-year-to" type="number" value="2025" min="1954" max="2025">
+          </label>
+        </div>
+        <p class="hint">Aus 217 deutschen #1-Hits (1954–2025). Alte Titel sind teils nicht auf Spotify verfügbar – die App springt dann automatisch zum nächsten.</p>
+      </div>
+
+      <div class="card">
+        <h2>Abspielen &amp; Raten</h2>
+        <div class="row year-row">
+          <label>♫ Abspielzeit:
+            <input id="opt-seconds" type="number" value="20" min="5" max="180"> s
+          </label>
+          <label>🤔 Nachdenken:
+            <input id="opt-think" type="number" value="10" min="3" max="120"> s
+          </label>
+          <label>⏱ Verlängern um:
+            <input id="opt-extend" type="number" value="10" min="3" max="120"> s
+          </label>
+        </div>
+        <p class="hint">Nach dem Abspielen läuft ein „Nachdenken"-Countdown mit Fanfare am Ende. Während des Songs kannst du <b>Skip</b> (überspringen) oder <b>Verlängern</b> (mehr Zeit) drücken.</p>
+      </div>
+
+      <button id="btn-start" class="btn big" disabled>▶ Spiel starten</button>
+      <div id="setup-error" class="error"></div>
+    </section>
+
+    <!-- ================= Spielfeld ================= -->
+    <section id="view-game" class="view" hidden>
+      <div class="topbar">
+        <button id="btn-back" class="btn ghost">← Anfangsmaske</button>
+        <span id="round-counter" class="round"></span>
+      </div>
+
+      <div class="card center" id="game-stage">
+        <!-- Such-Animation (Equalizer) -->
+        <div id="search-anim" class="search-anim" hidden>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+          <div class="eq-bar"></div>
+        </div>
+
+        <div id="game-status" class="game-status"></div>
+
+        <div id="countdown" class="countdown" hidden>
+          <div id="countdown-num" class="countdown-num">0</div>
+          <div class="countdown-bar"><div id="countdown-fill" class="countdown-fill"></div></div>
+        </div>
+
+        <!-- Playing-Controls: SKIP + VERLÄNGERN -->
+        <div class="play-controls" id="play-controls">
+          <button id="btn-skip" class="btn ghost" hidden>⏭ Skip</button>
+          <button id="btn-extend" class="btn ghost" hidden>⏱ Verlängern</button>
+        </div>
+
+        <button id="btn-reveal" class="btn big" hidden>👀 Anzeigen</button>
+
+        <div id="song-card" class="song-card" hidden>
+          <img id="song-img" alt="Albumcover">
+          <h3 id="song-title"></h3>
+          <p id="song-artist"></p>
+          <p id="song-year" class="year"></p>
+          <a id="song-link" target="_blank" rel="noopener">Auf Spotify öffnen ↗</a>
+        </div>
+      </div>
+
+      <button id="btn-next" class="btn big" disabled>⏭ Nächster Song</button>
+      <div id="game-error" class="error"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
