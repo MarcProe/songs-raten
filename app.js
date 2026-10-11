@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.9.1';
+  const APP_VERSION = '1.9.2';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -31,6 +31,12 @@
   const AUTH_KEY = 'sg.auth';
   const PKCE_KEY = 'sg.pkce';
   const CLIENT_KEY = 'sg.clientId';
+
+  // Optionaler CORS-Proxy (Cloudflare Worker) um den Retry-After-Header zu erhalten.
+  // Leer = Direkt-Connection zu api.spotify.com (Retry-After NICHT lesbar).
+  // Beispielswert: 'https://spotify-proxy.YOUR-SUBDOMAIN.workers.dev'
+  let PROXY_URL = '';
+  try { PROXY_URL = localStorage.getItem('sg.proxyUrl') || ''; } catch { }
 
   const GENRES = [
     { label: 'Pop', q: 'pop' },
@@ -94,6 +100,18 @@
     if (v) localStorage.setItem(CLIENT_KEY, v);
     else localStorage.removeItem(CLIENT_KEY);
   });
+
+  // Proxy-URL: Laden + Speichern
+  const proxyInput = $('#proxy-url');
+  if (proxyInput) {
+    proxyInput.value = PROXY_URL;
+    proxyInput.addEventListener('change', () => {
+      const v = proxyInput.value.trim();
+      PROXY_URL = v.replace(/\/+$/, ''); // trailing Slash entfernen
+      if (v) try { localStorage.setItem('sg.proxyUrl', PROXY_URL); } catch {}
+      else try { localStorage.removeItem('sg.proxyUrl'); } catch {}
+    });
+  }
 
   async function loadConfig() {
     try {
@@ -186,9 +204,7 @@
      Zusätzlich: 403 = Token gehört zu einem Nutzer NICHT in der App-Allowlist.
      Wir lesen den echten Response-Body (reason/message) UND den Retry-After-
      Header aus und zeigen sie – statt zu raten. Bei 403/QUOTA wird nicht
-     blind getry (brennt sonst nur zusätzliches Budget). Hinweis: Den
-     Retry-After-Header kann der Browser oft nicht lesen (CORS: Spotify setzt
-     kein Access-Control-Expose-Headers) – dann greift der Fallback-Text. */
+     blind getry (brennt sonst nur zusätzliches Budget). */
   const THROTTLE_MS = 600;
   const MAX_RETRIES = 2;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -234,7 +250,9 @@
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       await throttle();
-      const res = await fetch('https://api.spotify.com/v1' + path, {
+      // Proxy-URL nutzen, falls konfiguriert (liefert Retry-After durch)
+      const base = PROXY_URL ? PROXY_URL + '/v1' + path : 'https://api.spotify.com/v1' + path;
+      const res = await fetch(base, {
         ...opts,
         headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token },
       });

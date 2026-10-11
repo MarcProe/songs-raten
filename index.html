@@ -24,6 +24,10 @@
           <button id="btn-logout" class="btn ghost" hidden>Abmelden</button>
         </div>
         <p class="hint">Login läuft per PKCE direkt im Browser – kein Backend nötig. Client ID aus <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com</a>.</p>
+        <div class="row" style="margin-top:8px">
+          <input id="proxy-url" type="text" placeholder="Optional: CORS-Proxy-URL (z.B. https://spotify-proxy.xxxx.workers.dev)" autocomplete="off" style="flex:1;max-width:420px">
+        </div>
+        <p class="hint" style="margin-top:4px">Ohne Proxy: Retry-After-Header nicht lesbar (CORS). Mit Proxy: exakte Quota-Restzeit in der Fehlermeldung.</p>
       </div>
 
       <div class="card">
