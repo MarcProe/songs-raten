@@ -180,11 +180,13 @@
 
   /* ---------------- Rate-Limit / Quota-Schutz (Dev Mode) ----------------
      Spotify hat ZWEI getrennte Ebenen (offizielle Doku):
-       • Rate limit  → rolling 30-s-Fenster → HTTP 429 (heilt durch Warten)
-       • Dev-Quota   → Budget pro App/Konto, in Buckets → 429 reason QUOTA_EXCEEDED
+       • Rate limit  → rolling 30-s-Fenster → HTTP 429 (heilt nach kurzen Warten)
+       • Dev-Quota   → 24-h-TAGES-BUDGET pro DEVELOPER-KONTO (nicht pro App!),
+                       in Buckets, reason QUOTA_EXCEEDED. Reset ~alle 24 h.
      Zusätzlich: 403 = Token gehört zu einem Nutzer NICHT in der App-Allowlist.
-     Wir lesen den echten Response-Body (reason/message) aus und zeigen ihn,
-     statt zu raten – und brennen bei 403/QUOTA kein zusätzliches Quota mit Retry. */
+     Wir lesen den echten Response-Body (reason/message) UND den Retry-After-
+     Header aus und zeigen sie – statt zu raten. Bei 403/QUOTA wird nicht
+     blind getry (brennt sonst nur zusätzliches Budget). */
   const THROTTLE_MS = 600;
   const MAX_RETRIES = 2;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -195,12 +197,20 @@
     _lastCallAt = Date.now();
   }
 
-  function spotifyError(status, reason, msg) {
+  // retryAfterSek: Wert aus dem Retry-After-Header (Sekunden), falls vorhanden.
+  function spotifyError(status, reason, msg, retryAfterSek) {
     let text;
     if (status === 403) {
       text = 'Zugriff verweigert (HTTP 403). Laut Spotify: Der Token gehört zu einem Spotify-Nutzer, der NICHT in der Allowlist deiner App (Development Mode) steht – oder das aktive Abspiel-Device/Konto passt nicht zum Token. Prüfe, mit welchem Konto die Spotify-App auf dem Abspiel-Device läuft.';
     } else if (reason === 'QUOTA_EXCEEDED') {
-      text = 'Spotify-Dev-Quota erreicht (QUOTA_EXCEEDED). Das 30-Sekunden-Budget deiner Dev-App ist aufgebraucht. Bitte 30–60 Sekunden warten, dann „Nächster Song“ erneut – die App cached inzwischen Playlists/Genres, um das Budget zu schonen.';
+      text = 'Spotify-Dev-Quota deines Entwickler-Kontos aufgebraucht (QUOTA_EXCEEDED). Das ist ein 24-h-Tages-Budget deines DEVELOPER-KONTS (kein 30-s-Fenster) – alle deine Dev-Apps teilen es. 30–60 s Warten helfen hier nicht.';
+      if (Number.isFinite(retryAfterSek) && retryAfterSek > 0) {
+        const h = Math.floor(retryAfterSek / 3600);
+        const m = Math.round((retryAfterSek % 3600) / 60);
+        text += ' Laut „Retry-After“: erst in ca. ' + (h ? h + ' h ' : '') + m + ' min wieder möglich.';
+      } else {
+        text += ' In der Regel reset es erst am nächsten Tag (~24 h). Die App cached Playlists/Genres, um das Budget zu schonen.';
+      }
     } else if (status === 429) {
       text = 'Spotify rate-limits gerade (HTTP 429, rolling 30-s-Fenster). Kurze Pause einlegen (30–60 s), dann erneut.';
     } else {
@@ -241,20 +251,26 @@
 
         const isQuota = reason === 'QUOTA_EXCEEDED';
 
+        // Retry-After für die Meldung auslesen (Quota sagt damit, wann's wieder geht).
+        let retryAfterSek = NaN;
+        const ra = res.headers.get('Retry-After');
+        if (ra && /^\d+$/.test(ra)) retryAfterSek = parseInt(ra, 10);
+
         // 403 (Allowlist) und QUOTA_EXCEEDED heilen nicht durch sofortiges Retrying
-        // → mit echtem Grund abbrechen, kein zusätzliches Quota verbrennen.
-        if (res.status === 403 || isQuota) throw spotifyError(res.status, reason, msg);
+        // → mit echtem Grund abbrechen, kein zusätzliches Budget verbrennen.
+        if (res.status === 403 || isQuota) throw spotifyError(res.status, reason, msg, retryAfterSek);
 
         // Plain Rate Limit (429, rolling Window) → kurz zurückfahren, dann retry.
         if (attempt < MAX_RETRIES) {
           let waitMs = 0;
-          const ra = res.headers.get('Retry-After');
-          if (ra && /^\d+$/.test(ra)) waitMs = parseInt(ra, 10) * 1000;
+          if (Number.isFinite(retryAfterSek)) waitMs = retryAfterSek * 1000;
           if (waitMs <= 0) waitMs = [4000, 12000][attempt] || 12000;
+          // Sehr große Wartezeit (Quota-artig) → nicht ewig blockieren, sauber abbrechen.
+          if (waitMs > 15000) throw spotifyError(res.status, reason, msg, retryAfterSek);
           await sleep(waitMs);
           continue;
         }
-        throw spotifyError(res.status, reason, msg);
+        throw spotifyError(res.status, reason, msg, retryAfterSek);
       }
 
       return res;
@@ -291,7 +307,7 @@
   let legendsCache = null;
 
   /* In-Session-Cache: senkt die Spotify-Requests pro Runde massiv,
-     um das Development-Mode-Quota (30-s-Fenster) zu schonen.
+     um das Development-Mode-Tages-Budget zu schonen.
        • Top 50: 1 Request alle 6 h (Charts sind wochenstabil)
        • Genre:  1 Request pro neuem Genre, danach 0 */
   const cache = { top50: null, top50At: 0, genre: {} };
