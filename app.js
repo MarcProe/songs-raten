@@ -186,7 +186,9 @@
      Zusätzlich: 403 = Token gehört zu einem Nutzer NICHT in der App-Allowlist.
      Wir lesen den echten Response-Body (reason/message) UND den Retry-After-
      Header aus und zeigen sie – statt zu raten. Bei 403/QUOTA wird nicht
-     blind getry (brennt sonst nur zusätzliches Budget). */
+     blind getry (brennt sonst nur zusätzliches Budget). Hinweis: Den
+     Retry-After-Header kann der Browser oft nicht lesen (CORS: Spotify setzt
+     kein Access-Control-Expose-Headers) – dann greift der Fallback-Text. */
   const THROTTLE_MS = 600;
   const MAX_RETRIES = 2;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -209,7 +211,7 @@
         const m = Math.round((retryAfterSek % 3600) / 60);
         text += ' Laut „Retry-After“: erst in ca. ' + (h ? h + ' h ' : '') + m + ' min wieder möglich.';
       } else {
-        text += ' In der Regel reset es erst am nächsten Tag (~24 h). Die App cached Playlists/Genres, um das Budget zu schonen.';
+        text += ' Exakte Restzeit ist aus dem Browser nicht lesbar (CORS blockiert den Retry-After-Header). In der Regel reset das Budget erst am nächsten Tag (~24 h). Bis dahin: Top 50 wird nur 1× alle 6 h geladen, Genre-Ergebnisse sind gecacht – das schont dein verbleibendes Budget.';
       }
     } else if (status === 429) {
       text = 'Spotify rate-limits gerade (HTTP 429, rolling 30-s-Fenster). Kurze Pause einlegen (30–60 s), dann erneut.';
