@@ -6,7 +6,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.9';
+  const APP_VERSION = '1.9.1';
 
   /* ---------------- DOM-Helper ---------------- */
   const $ = (s) => document.querySelector(s);
@@ -178,15 +178,38 @@
     } catch { return false; }
   }
 
-  /* ---------------- Rate-Limit-Schutz (Dev Mode) ---------------- */
+  /* ---------------- Rate-Limit / Quota-Schutz (Dev Mode) ----------------
+     Spotify hat ZWEI getrennte Ebenen (offizielle Doku):
+       • Rate limit  → rolling 30-s-Fenster → HTTP 429 (heilt durch Warten)
+       • Dev-Quota   → Budget pro App/Konto, in Buckets → 429 reason QUOTA_EXCEEDED
+     Zusätzlich: 403 = Token gehört zu einem Nutzer NICHT in der App-Allowlist.
+     Wir lesen den echten Response-Body (reason/message) aus und zeigen ihn,
+     statt zu raten – und brennen bei 403/QUOTA kein zusätzliches Quota mit Retry. */
   const THROTTLE_MS = 600;
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 2;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let _lastCallAt = 0;
   async function throttle() {
     const wait = _lastCallAt + THROTTLE_MS - Date.now();
     if (wait > 0) await sleep(wait);
     _lastCallAt = Date.now();
+  }
+
+  function spotifyError(status, reason, msg) {
+    let text;
+    if (status === 403) {
+      text = 'Zugriff verweigert (HTTP 403). Laut Spotify: Der Token gehört zu einem Spotify-Nutzer, der NICHT in der Allowlist deiner App (Development Mode) steht – oder das aktive Abspiel-Device/Konto passt nicht zum Token. Prüfe, mit welchem Konto die Spotify-App auf dem Abspiel-Device läuft.';
+    } else if (reason === 'QUOTA_EXCEEDED') {
+      text = 'Spotify-Dev-Quota erreicht (QUOTA_EXCEEDED). Das 30-Sekunden-Budget deiner Dev-App ist aufgebraucht. Bitte 30–60 Sekunden warten, dann „Nächster Song“ erneut – die App cached inzwischen Playlists/Genres, um das Budget zu schonen.';
+    } else if (status === 429) {
+      text = 'Spotify rate-limits gerade (HTTP 429, rolling 30-s-Fenster). Kurze Pause einlegen (30–60 s), dann erneut.';
+    } else {
+      text = 'Spotify-Aufruf fehlgeschlagen (HTTP ' + status + ')';
+    }
+    if (msg && msg !== 'Too many requests' && msg !== 'Forbidden') text += ' [' + msg + ']';
+    const e = new Error(text);
+    e.spotify = true;
+    return e;
   }
 
   async function apiFetch(path, opts = {}, authRetry = true) {
@@ -212,24 +235,26 @@
         continue;
       }
 
-      if ((res.status === 429 || res.status === 403) && attempt < MAX_RETRIES) {
-        let waitMs = 0;
-        const ra = res.headers.get('Retry-After');
-        if (ra && /^\d+$/.test(ra)) waitMs = parseInt(ra, 10) * 1000;
-        if (waitMs <= 0) waitMs = [5000, 15000, 45000][attempt] || 15000;
-        if (waitMs > 30000) {
-          const sec = Math.round(waitMs / 1000);
-          throw new Error('Spotify rate-limits gerade (HTTP ' + res.status + '). Bitte ca. ' + sec + ' Sekunden warten, dann „Nächster Song“ erneut.');
-        }
-        await sleep(waitMs);
-        continue;
-      }
+      if (!res.ok && (res.status === 429 || res.status === 403)) {
+        let reason = '', msg = '';
+        try { const b = await res.json(); if (b && b.error) { reason = b.error.reason || ''; msg = b.error.message || ''; } } catch { }
 
-      if (res.status === 429) {
-        throw new Error('Spotify rate-limits gerade (HTTP 429) – Dev-Quota im 30s-Fenster erschöpft. 30–60 Sekunden warten, dann erneut.');
-      }
-      if (res.status === 403) {
-        throw new Error('Spotify verweigert gerade Zugriff (HTTP 403) – meist Dev-Quota im 30s-Fenster erschöpft. 30–60 Sekunden warten, dann erneut.');
+        const isQuota = reason === 'QUOTA_EXCEEDED';
+
+        // 403 (Allowlist) und QUOTA_EXCEEDED heilen nicht durch sofortiges Retrying
+        // → mit echtem Grund abbrechen, kein zusätzliches Quota verbrennen.
+        if (res.status === 403 || isQuota) throw spotifyError(res.status, reason, msg);
+
+        // Plain Rate Limit (429, rolling Window) → kurz zurückfahren, dann retry.
+        if (attempt < MAX_RETRIES) {
+          let waitMs = 0;
+          const ra = res.headers.get('Retry-After');
+          if (ra && /^\d+$/.test(ra)) waitMs = parseInt(ra, 10) * 1000;
+          if (waitMs <= 0) waitMs = [4000, 12000][attempt] || 12000;
+          await sleep(waitMs);
+          continue;
+        }
+        throw spotifyError(res.status, reason, msg);
       }
 
       return res;
@@ -264,6 +289,13 @@
   /* ---------------- Spielmodi: Top 50 DE & Chart-Legenden ---------------- */
   const DE_TOP50_PLAYLIST = '37i9dQZEVXbJiZcmkrIHGU';
   let legendsCache = null;
+
+  /* In-Session-Cache: senkt die Spotify-Requests pro Runde massiv,
+     um das Development-Mode-Quota (30-s-Fenster) zu schonen.
+       • Top 50: 1 Request alle 6 h (Charts sind wochenstabil)
+       • Genre:  1 Request pro neuem Genre, danach 0 */
+  const cache = { top50: null, top50At: 0, genre: {} };
+  const TOP50_TTL = 6 * 3600 * 1000;
 
   async function loadLegends() {
     if (legendsCache) return legendsCache;
@@ -311,9 +343,16 @@
     return cand[(Math.random() * cand.length) | 0];
   }
 
-  // Modus: Top 50 Deutschland
-  async function findSongCharts(p, onStatus) {
-    if (onStatus) onStatus('Lade deutsche Top 50 …');
+  // Top-50-Playlist: nur 1 Request alle 6 h (Cache), sonst 1 Request pro Runde.
+  async function getTop50Tracks() {
+    if (cache.top50 && (Date.now() - cache.top50At) < TOP50_TTL) return cache.top50;
+    try {
+      const s = JSON.parse(localStorage.getItem('sg.top50') || 'null');
+      if (s && s.at && (Date.now() - s.at) < TOP50_TTL && Array.isArray(s.items) && s.items.length) {
+        cache.top50 = s.items; cache.top50At = s.at; return s.items;
+      }
+    } catch { }
+
     const items = [];
     const res = await apiFetch('/playlists/' + DE_TOP50_PLAYLIST + '/tracks?limit=50&offset=0');
     if (res.ok) {
@@ -337,6 +376,17 @@
       try { const b = await res.json(); detail = b && b.error ? (b.error.message || b.error.reason) : ''; } catch { }
       throw new Error('Playlist-Abfrage: HTTP ' + res.status + ' (' + detail + ')');
     }
+    if (items.length) {
+      cache.top50 = items; cache.top50At = Date.now();
+      try { localStorage.setItem('sg.top50', JSON.stringify({ at: cache.top50At, items })); } catch { }
+    }
+    return items;
+  }
+
+  // Modus: Top 50 Deutschland
+  async function findSongCharts(p, onStatus) {
+    if (onStatus) onStatus(cache.top50 ? '🇩🇪 Top 50 (gecacht) – Song wird gewählt …' : '🇩🇪 Lade deutsche Top 50 …');
+    const items = await getTop50Tracks();
     if (!items.length) return { _empty: 'Die Top-50-Playlist lieferte keine Songs.' };
     const pool = items.filter(Boolean).map(trackToPool);
     return pickFromPool(pool) || { _empty: 'Alle Songs der Top 50 wurden bereits gespielt – Sitzung zurückgesetzt.' };
@@ -366,7 +416,7 @@
         }
         if (items.length) continue; // nur schon gespielte Treffer – nächsten Kandidaten
       } catch (e) {
-        if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
+        if (e.spotify) throw e; // 429/403/QUOTA durchreichen (echte Meldung)
       }
     }
     return { _empty: 'Keiner der Kandidaten wurde auf Spotify gefunden (10 Versuche). Zeitraum ggf. ab ~1980 wählen.' };
@@ -403,25 +453,34 @@
     throw new Error('HTTP ' + res.status + ' (' + detail + ')');
   }
 
-  // Genre-Modus: 1 Genre per Zufall → 1 Such-Call → Song nur aus diesem Genre
+  // Genre-Modus: 1 Genre per Zufall → Song nur aus diesem Genre.
+  // Ergebnis pro Genre wird gecacht → wiederholte Auswahl = 0 Requests.
   async function findSong(p, onStatus) {
     const genrePool = p.genres.length ? p.genres : ALL_GENRE_POOL;
     const genre = genrePool[(Math.random() * genrePool.length) | 0];
-    if (onStatus) onStatus('Genre: „' + genre + '“ – Song wird gesucht …');
-    let items;
-    try {
-      items = await searchGenre(genre);
-      if (p.top100 && items.length >= 50) {
-        const more = await searchGenre(genre, 50);
-        if (more.length) {
-          const seenIds = new Set(items.map((t) => t && t.id));
-          for (const t of more) if (t && t.id && !seenIds.has(t.id)) { items.push(t); seenIds.add(t.id); }
+    const cacheKey = genre + (p.top100 ? ':t100' : '');
+
+    let items = cache.genre[cacheKey];
+    if (items) {
+      if (onStatus) onStatus('Genre: „' + genre + '“ (gecacht) – Song wird gewählt …');
+    } else {
+      if (onStatus) onStatus('Genre: „' + genre + '“ – Song wird gesucht …');
+      try {
+        items = await searchGenre(genre);
+        if (p.top100 && items.length >= 50) {
+          const more = await searchGenre(genre, 50);
+          if (more.length) {
+            const seenIds = new Set(items.map((t) => t && t.id));
+            for (const t of more) if (t && t.id && !seenIds.has(t.id)) { items.push(t); seenIds.add(t.id); }
+          }
         }
+        cache.genre[cacheKey] = items;
+      } catch (e) {
+        if (e.spotify) throw e; // 429/403/QUOTA durchreichen (echte Meldung)
+        return { _empty: 'Genre-Suche fehlgeschlagen: ' + e.message };
       }
-    } catch (e) {
-      if (e.message && /HTTP 429|HTTP 403/.test(e.message)) throw e;
-      return { _empty: 'Genre-Suche fehlgeschlagen: ' + e.message };
     }
+
     const pool = [];
     for (const t of items) {
       if (!t) continue;
@@ -438,9 +497,9 @@
       });
     }
     if (!pool.length) {
-      const hint = items.length === 0
-        ? 'Die Suche lieferte keine Tracks – Token prüfen oder kurz warten (Rate Limit).'
-        : items.length + ' Tracks in „' + genre + '“ gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (Filter lockern oder „Nächster Song“ erneut).';
+      const hint = (items && items.length === 0)
+        ? 'Die Suche lieferte keine Tracks – kurz warten und erneut (Rate Limit/Quota).'
+        : 'Tracks in „' + genre + '“ gefunden, aber keiner im Bereich ' + p.yearFrom + '–' + p.yearTo + ' (Filter lockern oder „Nächster Song“ erneut – ggf. anderes Genre).';
       return { _empty: hint };
     }
     if (p.top100) {
